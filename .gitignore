@@ -1,0 +1,22 @@
+# Python Virtual Environments
+venv/
+env/
+.env
+
+# IDE and System Files
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Compiled Executables & Binaries
+*.exe
+*.o
+*.out
+
+# Databases
+*.db
+*.sqlite3
+
+# Personal Documents
+reference.docx
