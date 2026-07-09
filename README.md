@@ -30,7 +30,7 @@ An end-to-end, automated 3-statement financial modeling pipeline built to progra
 
 ### 𝖬 Math & Valuation Framework
 *   **Free Cash Flow to Firm (FCFF):** Programmatically projects core operating cash flows across a 5-year explicit forward horizon using normalized historical drivers:
-  $$FCFF = NOPAT + \text{D\&A} - CapEx - \Delta NWC$$
+  $$FCFF = NOPAT + \text{D \amp A} - CapEx - \Delta NWC$$
 *   **Cost of Capital (WACC & CAPM):** Derives dynamic discount rates by calculating the Weighted Average Cost of Capital (WACC), applying the Capital Asset Pricing Model (CAPM) to evaluate equity risk premiums:
   $$K_e = R_f + \beta(R_m - R_f)$$
 *   **Terminal Value Estimation:** Computes the continuing enterprise value beyond the explicit forecast period using the Gordon Growth Model:
