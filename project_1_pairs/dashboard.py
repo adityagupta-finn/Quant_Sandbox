@@ -1,3 +1,4 @@
+import sys
 import streamlit as st
 import sqlite3
 from pathlib import Path
@@ -8,6 +9,9 @@ import subprocess
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "market_data.db"
 ENGINE_PATH = BASE_DIR / "engine"
+
+sys.path.insert(0, str(BASE_DIR))
+from pair_config import TICKER_A, TICKER_B
 
 # --- 1. ARCHITECTURAL CONFIGURATION ---
 st.set_page_config(page_title="Pairs Arbitrage & Risk Engine", layout="wide")
@@ -46,12 +50,19 @@ try:
     st.sidebar.header("📈 Model Statistics")
     st.sidebar.metric(label="Dynamic OLS Hedge Ratio (β)", value=f"{latest_row['Beta']:.4f}")
     
-    # Statistical Significance Monitor
-    p_val = latest_row['ADF_P_Value']
-    if p_val < 0.05:
-        st.sidebar.success(f"ADF p-value: {p_val:.4f}\n[Stationary Regime]")
+    # Statistical Significance Monitor -- only render this if the ADF test
+    # actually ran this update (ADF_Computed). Otherwise ADF_P_Value is a
+    # placeholder, and showing a colored "Stationary Regime" badge for a
+    # number nobody computed would be a false claim.
+    adf_computed = bool(latest_row.get('ADF_Computed', False))
+    if adf_computed:
+        p_val = latest_row['ADF_P_Value']
+        if p_val < 0.05:
+            st.sidebar.success(f"ADF p-value: {p_val:.4f}\n[Stationary Regime]")
+        else:
+            st.sidebar.error(f"ADF p-value: {p_val:.4f}\n[Non-Stationary Warning]")
     else:
-        st.sidebar.error(f"ADF p-value: {p_val:.4f}\n[Non-Stationary Warning]")
+        st.sidebar.caption("Cointegration not tested this run (ENFORCE_COINTEGRATION was False).")
 except Exception as e:
     st.sidebar.warning("Awaiting market data population...")
     df = pd.DataFrame()
@@ -103,7 +114,7 @@ if not df.empty:
     # --- 5. AUDITABLE RECENT DATA LEDGER ---
     st.subheader("Data Audit Ledger (Most Recent Observations)")
     # Render the last 5 rows of data in a clean data grid
-    audit_df = df.tail(5)[['Date', 'AAPL_Close', 'MSFT_Close', 'Beta', 'Spread', 'Z_Score', 'ADF_P_Value']]
+    audit_df = df.tail(5)[['Date', f'{TICKER_A}_Close', f'{TICKER_B}_Close', 'Beta', 'Spread', 'Z_Score', 'ADF_P_Value']]
     st.dataframe(audit_df, use_container_width=True, hide_index=True)
     st.markdown("---")
 

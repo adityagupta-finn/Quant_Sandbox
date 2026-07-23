@@ -1,4 +1,5 @@
 import os
+import sys
 import sqlite3
 from pathlib import Path
 from dotenv import load_dotenv
@@ -10,6 +11,9 @@ import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "market_data.db"
+
+sys.path.insert(0, str(BASE_DIR))
+from pair_config import TICKER_A, TICKER_B
 
 def run_pipeline():
     # 1. Load hidden keys securely from the .env file
@@ -25,7 +29,7 @@ def run_pipeline():
     client = StockHistoricalDataClient(api_key, secret_key)
     
     # 3. Setup parameters (Past 2 years of daily data)
-    tickers = ["AAPL", "MSFT"]
+    tickers = [TICKER_A, TICKER_B]
     start_date = datetime.now() - timedelta(days=2 * 365)
     
     request_params = StockBarsRequest(
@@ -36,7 +40,7 @@ def run_pipeline():
     
     print("Connecting to Alpaca Market Data Servers...")
     try:
-        # 4. Fetch data and convert instantly to a尊 DataFrame
+        # 4. Fetch data and convert instantly to a DataFrame
         bars = client.get_stock_bars(request_params)
         df = bars.df
         

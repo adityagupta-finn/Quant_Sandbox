@@ -1,26 +1,34 @@
+import sys
 import sqlite3
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
-
-# --- MASTER TOGGLES ---
-ENFORCE_COINTEGRATION = False  # Turned TRUE to implement strict risk gates
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "market_data.db"
 
-def calculate_zscores(db_name=DEFAULT_DB_PATH, window=20):
+sys.path.insert(0, str(BASE_DIR))
+from pair_config import TICKER_A, TICKER_B
+
+# ENFORCE_COINTEGRATION gates signal generation on the ADF test actually
+# passing (p < 0.05). With it off, no test is run at all and the pipeline
+# treats every spread as tradeable regardless of whether it's actually
+# mean-reverting.
+ENFORCE_COINTEGRATION = True
+
+def calculate_zscores(db_name=DEFAULT_DB_PATH, window=60):
     print("Connecting to database...")
     conn = sqlite3.connect(db_name)
 
     # 1. Read the raw data from SQLite into Pandas DataFrames
-    print("Loading AAPL and MSFT data...")
-    aapl_df = pd.read_sql("SELECT Date, AAPL_Close FROM AAPL", conn)
-    msft_df = pd.read_sql("SELECT Date, MSFT_Close FROM MSFT", conn)
+    print(f"Loading {TICKER_A} and {TICKER_B} data...")
+    a_df = pd.read_sql(f"SELECT Date, {TICKER_A}_Close FROM {TICKER_A}", conn)
+    b_df = pd.read_sql(f"SELECT Date, {TICKER_B}_Close FROM {TICKER_B}", conn)
 
     # 2. Merge the data securely (Inner join prevents holiday/weekend mismatch)
-    df = pd.merge(aapl_df, msft_df, on="Date", how="inner")
+    df = pd.merge(a_df, b_df, on="Date", how="inner")
     
     # Force chronological order to prevent data leakage (look-ahead bias)
     df['Date'] = pd.to_datetime(df['Date'])
@@ -38,15 +46,15 @@ def calculate_zscores(db_name=DEFAULT_DB_PATH, window=20):
 
     # PHASE 1: Populate ALL Spread and Beta metrics first
     for i in range(window - 1, len(df)):
-        y = df['AAPL_Close'].iloc[i - window + 1 : i + 1].values
-        x = df['MSFT_Close'].iloc[i - window + 1 : i + 1].values
-        
-        # Run OLS Regression via numpy matrix inversion
-        A = np.vstack([x, np.ones(len(x))]).T
-        beta, alpha = np.linalg.lstsq(A, y, rcond=None)[0]
-        
+        y = df[f'{TICKER_A}_Close'].iloc[i - window + 1 : i + 1].values
+        x = df[f'{TICKER_B}_Close'].iloc[i - window + 1 : i + 1].values
+
+        # Run OLS Regression via statsmodels (same library used for the ADF test below)
+        X = sm.add_constant(x)
+        alpha, beta = sm.OLS(y, X).fit().params
+
         betas[i] = beta
-        spreads[i] = df['AAPL_Close'].iloc[i] - (beta * df['MSFT_Close'].iloc[i])
+        spreads[i] = df[f'{TICKER_A}_Close'].iloc[i] - (beta * df[f'{TICKER_B}_Close'].iloc[i])
 
     # Map our calculated vectors back into the main DataFrame
     df['Beta'] = betas
@@ -66,7 +74,14 @@ def calculate_zscores(db_name=DEFAULT_DB_PATH, window=20):
             
         df['ADF_P_Value'] = p_values
     else:
-        df['ADF_P_Value'] = 0.0000  # Default placeholder value for sandbox testing
+        # Placeholder only -- NOT a real p-value. Must stay non-NaN so it
+        # survives the dropna() below; ADF_Computed (not this number) is
+        # what tells the dashboard whether cointegration was actually tested.
+        df['ADF_P_Value'] = 0.0
+
+    # Lets the dashboard tell a genuinely computed p-value apart from a run
+    # where cointegration testing was skipped entirely.
+    df['ADF_Computed'] = ENFORCE_COINTEGRATION
 
     # 4. Standardizing the Movement (Z-Score)
     # Now that the spread is beta-neutral, we calculate how far it is stretching
@@ -84,14 +99,16 @@ def calculate_zscores(db_name=DEFAULT_DB_PATH, window=20):
         if latest_p >= 0.05:
             print("CRITICAL HALT: Cointegration leash is broken (p-value >= 0.05).")
             print("Market state is a Random Walk. System halting execution pipeline.")
-           # conn.close()
-            #return
+            conn.close()
+            return
 
     # 5. Save the upgraded analytical table back to SQLite for C++ consumption
     print("Saving calculated alpha matrix to database (table: 'pairs_data')...")
     df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+    df['Ticker_A'] = TICKER_A
+    df['Ticker_B'] = TICKER_B
     df.to_sql("pairs_data", conn, if_exists="replace", index=False)
-    
+
     conn.close()
 
     print("\n--- UPGRADED QUANT METRICS ---")

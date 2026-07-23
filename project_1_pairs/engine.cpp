@@ -30,15 +30,20 @@ int main(int argc, char* argv[]) {
     }
 
     // 2. Query the absolute latest data point (Limit 1)
-    string sql = "SELECT Date, Z_Score FROM pairs_data ORDER BY Date DESC LIMIT 1;";
+    // Ticker_A/Ticker_B are written by zscore_calculator.py per run, so the
+    // signal text always names the pair that was actually configured
+    // (PAIRS_TICKER_A/PAIRS_TICKER_B) rather than a hardcoded pair.
+    string sql = "SELECT Date, Z_Score, Ticker_A, Ticker_B FROM pairs_data ORDER BY Date DESC LIMIT 1;";
     sqlite3_stmt* stmt;
 
     if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, NULL) == SQLITE_OK) {
-        
+
         // 3. Read the data row
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             string date = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
             double z_score = sqlite3_column_double(stmt, 1);
+            string ticker_a = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            string ticker_b = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
 
             cout << "\n--- LIVE MARKET SCAN ---" << endl;
             cout << "Date: " << date << " | Z-Score: " << z_score << endl;
@@ -46,10 +51,10 @@ int main(int argc, char* argv[]) {
             // 4. The Algorithmic Trade Execution Logic
             if (z_score >= 2.0) {
                 cout << "SIGNAL: EXTREME DIVERGENCE (OVERBOUGHT)." << endl;
-                cout << "ACTION: EXECUTING SPREAD -> SHORT AAPL, LONG MSFT." << endl;
+                cout << "ACTION: EXECUTING SPREAD -> SHORT " << ticker_a << ", LONG " << ticker_b << "." << endl;
             } else if (z_score <= -2.0) {
                 cout << "SIGNAL: EXTREME DIVERGENCE (OVERSOLD)." << endl;
-                cout << "ACTION: EXECUTING SPREAD -> LONG AAPL, SHORT MSFT." << endl;
+                cout << "ACTION: EXECUTING SPREAD -> LONG " << ticker_a << ", SHORT " << ticker_b << "." << endl;
             } else {
                 cout << "SIGNAL: MEAN REVERTED. NO STATISTICAL EDGE." << endl;
                 cout << "ACTION: DO NOTHING. HOLDING CASH." << endl;
