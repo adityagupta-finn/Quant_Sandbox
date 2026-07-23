@@ -1,13 +1,26 @@
 #include <iostream>
 #include <string>
+#include <filesystem>
 #include <sqlite3.h>
 
 using namespace std;
+namespace fs = std::filesystem;
 
-int main() {
+int main(int argc, char* argv[]) {
+    // DB path: explicit argv[1] if given, otherwise default to
+    // "market_data.db" next to this executable (not the cwd it was
+    // launched from) so it lines up with where the Python pipeline writes.
+    string db_path;
+    if (argc > 1) {
+        db_path = argv[1];
+    } else {
+        fs::path exe_dir = fs::weakly_canonical(fs::path(argv[0])).parent_path();
+        db_path = (exe_dir / "market_data.db").string();
+    }
+
     sqlite3* db;
     // 1. Open the pipeline to the database
-    int exit = sqlite3_open("market_data.db", &db);
+    int exit = sqlite3_open(db_path.c_str(), &db);
     
     if (exit) {
         cerr << "CRITICAL ERROR: Cannot open database: " << sqlite3_errmsg(db) << endl;

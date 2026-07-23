@@ -1,11 +1,15 @@
 import os
 import sqlite3
+from pathlib import Path
 from dotenv import load_dotenv
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta
 import pandas as pd
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "market_data.db"
 
 def run_pipeline():
     # 1. Load hidden keys securely from the .env file
@@ -43,7 +47,7 @@ def run_pipeline():
         print("Data fetched successfully! Structuring database...")
         
         # 5. Process and split data into individual SQL tables
-        conn = sqlite3.connect("market_data.db")
+        conn = sqlite3.connect(str(DB_PATH))
         
         for ticker in tickers:
             # Filter rows specifically belonging to this ticker symbol

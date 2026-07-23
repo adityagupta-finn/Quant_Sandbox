@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from statsmodels.tsa.stattools import adfuller
@@ -6,7 +7,10 @@ from statsmodels.tsa.stattools import adfuller
 # --- MASTER TOGGLES ---
 ENFORCE_COINTEGRATION = False  # Turned TRUE to implement strict risk gates
 
-def calculate_zscores(db_name="project_1_pairs/market_data.db", window=20):
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_DB_PATH = BASE_DIR / "market_data.db"
+
+def calculate_zscores(db_name=DEFAULT_DB_PATH, window=20):
     print("Connecting to database...")
     conn = sqlite3.connect(db_name)
 

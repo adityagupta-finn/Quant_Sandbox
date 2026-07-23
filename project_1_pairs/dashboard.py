@@ -1,8 +1,13 @@
 import streamlit as st
 import sqlite3
+from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import subprocess
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "market_data.db"
+ENGINE_PATH = BASE_DIR / "engine"
 
 # --- 1. ARCHITECTURAL CONFIGURATION ---
 st.set_page_config(page_title="Pairs Arbitrage & Risk Engine", layout="wide")
@@ -30,7 +35,7 @@ z_threshold = st.sidebar.slider("Z-Score Entry Threshold (σ)", min_value=1.5, m
 enforce_coin = st.sidebar.toggle("Enforce Cointegration Constraints", value=True)
 
 # Establish connection to the local database cluster
-conn = sqlite3.connect("project_1_pairs/market_data.db")
+conn = sqlite3.connect(DB_PATH)
 try:
     # Fetch time-series array ordered chronologically
     df = pd.read_sql("SELECT * FROM pairs_data ORDER BY Date ASC", conn)
@@ -114,11 +119,10 @@ if not df.empty:
         
         # Invoke compiled C++ module with string-vector arguments (argv)
         process = subprocess.Popen(
-            ["engine.exe", str(z_threshold), str(enforce_coin)],
+            [str(ENGINE_PATH), str(DB_PATH), str(z_threshold), str(enforce_coin)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            shell=True
+            text=True
         )
         stdout, stderr = process.communicate()
         
