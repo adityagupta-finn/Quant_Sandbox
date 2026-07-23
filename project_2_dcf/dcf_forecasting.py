@@ -53,8 +53,10 @@ from ticker_utils import validate_ticker, quoted_table_name
 # Resolved relative to this file, not the cwd — see dcf_ingestion.py.
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = BASE_DIR / "corporate_data.db"
-TAX_RATE = 0.21              # US federal corporate tax rate (21% since 2017 Tax Cuts and Jobs Act)
-FORECAST_YEARS = 5           # Number of explicit forecast years before terminal value takes over
+TAX_RATE = 0.21               # Default tax rate (US federal, 21% since 2017 Tax Cuts and Jobs Act) used
+                               # ONLY when generate_fcff_projections() is called without an explicit
+                               # tax_rate — dcf_valuation.py always passes a jurisdiction-resolved rate.
+FORECAST_YEARS = 5            # Number of explicit forecast years before terminal value takes over
 
 # Every field the model actually consumes downstream (CAGR, margins, WACC's
 # debt lookup). A fiscal year missing any of these is not usable.
@@ -256,7 +258,7 @@ def calculate_advanced_drivers(df):
     return cagr_growth, avg_margin, avg_dna_pct, avg_capex_pct
 
 
-def generate_fcff_projections(ticker):
+def generate_fcff_projections(ticker, tax_rate=TAX_RATE):
     """
     Generate 5-year Free Cash Flow to Firm (FCFF) projections for a given ticker.
 
@@ -271,14 +273,29 @@ def generate_fcff_projections(ticker):
     ----------
     ticker : str
         Stock ticker symbol (e.g., "AAPL").
+    tax_rate : float, optional
+        Corporate tax rate used for NOPAT = EBIT × (1 − tax_rate). Defaults
+        to the module-level TAX_RATE (21%, a US assumption) for standalone/
+        manual use, but callers valuing a non-US company should pass the
+        jurisdiction-appropriate rate explicitly — dcf_valuation.py resolves
+        this per-ticker via resolve_jurisdiction_defaults() and always
+        passes it explicitly rather than relying on this default.
 
     Returns
     -------
     tuple[pd.DataFrame, float, float]
         - forecast_df : DataFrame with columns:
               Forecast Year, Projected Revenue ($B), Expected Future FCFF ($B)
-          NOTE: Despite the column name saying "$B", the values are in RAW
-          DOLLARS (not billions). The valuation module divides by 1e9 for display.
+          NOTE: the "$B" column labels are misleading in two ways this
+          function has no way to fix — (1) despite the name, values are in
+          RAW units, not billions (dcf_valuation.py divides by 1e9 for
+          display); (2) despite the "$", values are in whatever currency
+          Yahoo reports this company's financials in, which this module
+          never looks up (it only reads the cached numbers, not the
+          ticker's metadata). dcf_valuation.py fetches the real currency
+          via fetch_market_assumptions() and relabels these values with it
+          before ever displaying them to a user — nothing with this
+          module's raw "$B" labels reaches the terminal as-is.
         - cagr_growth : float — the computed revenue CAGR (decimal fraction).
         - avg_margin  : float — the computed average operating margin.
 
@@ -318,7 +335,7 @@ def generate_fcff_projections(ticker):
         #    This represents the after-tax cash profit from operations,
         #    ignoring how the company is financed (debt vs equity).
         projected_ebit = running_rev * avg_margin
-        nopat = projected_ebit * (1 - TAX_RATE)
+        nopat = projected_ebit * (1 - tax_rate)
 
         # 3. NON-CASH AND REINVESTMENT ADJUSTMENTS:
         #    D&A:   Added back because it reduced EBIT but no cash actually left.

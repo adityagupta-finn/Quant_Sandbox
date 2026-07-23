@@ -303,6 +303,12 @@ def execute_valuation_audit_pipeline():
     values scaled to billions (÷ 1e9) for readability — mimicking the style
     of investment banking research reports.
 
+    Monetary columns are labeled with the company's actual reporting
+    currency (via a yf.Ticker(ticker).info lookup), not a hardcoded "$" —
+    Yahoo reports these statements in the company's own currency (e.g. INR
+    for TATASTEEL.NS), and mislabeling that as USD produced a number that
+    looked plausible but had no real-world meaning.
+
     This function is only invoked when dcf_ingestion.py is run as __main__;
     it is NOT called by the forecasting or valuation modules.
     """
@@ -323,22 +329,32 @@ def execute_valuation_audit_pipeline():
     print(f"Analyzing a {len(income)}-Year Historical Accounting Horizon.")
     print("------------------------------------------------------------------")
 
+    # ── Look up the company's actual reporting currency ───────────────────
+    # These financial statements are exactly as Yahoo reports them for this
+    # company, in that company's own reporting currency (e.g. INR for an
+    # NSE-listed company) — NOT converted to USD. Labeling them with a bare
+    # "$" regardless of ticker previously made a rupee-denominated company's
+    # revenue look like a dollar figure, silently, with no error.
+    ticker_info = yf.Ticker(user_ticker).info
+    currency = ticker_info.get("financialCurrency") or ticker_info.get("currency") or "USD"
+
     # ── Scale raw absolute values to billions for human readability ───────
-    # Corporate financials are typically in the range of $10^9 – $10^12.
-    # Dividing by 1e9 converts them to a familiar "$X.XX Billion" format.
-    print(f"📊 HISTORICAL AUDIT SUMMARY LEDGER FOR {user_ticker}:")
+    # Corporate financials are typically in the range of 10^9 – 10^12 (in
+    # whatever currency the company reports in). Dividing by 1e9 converts
+    # them to a familiar "X.XX Billion" format.
+    print(f"📊 HISTORICAL AUDIT SUMMARY LEDGER FOR {user_ticker} (figures in {currency}):")
 
     fiscal_years = pd.to_datetime(income['date']).dt.year
 
     audit_dataframe = pd.DataFrame({
         "Fiscal Year": fiscal_years,
-        "Total Revenue ($B)": pd.to_numeric(income['revenue']) / 1e9,
-        "Operating Income / EBIT ($B)": pd.to_numeric(income['operatingIncome']) / 1e9,
-        "Total Debt ($B)": pd.to_numeric(balance['totalDebt']) / 1e9,
-        "Depreciation & Amort. ($B)": pd.to_numeric(cashflow['depreciationAndAmortization']) / 1e9,
+        f"Total Revenue ({currency} B)": pd.to_numeric(income['revenue']) / 1e9,
+        f"Operating Income / EBIT ({currency} B)": pd.to_numeric(income['operatingIncome']) / 1e9,
+        f"Total Debt ({currency} B)": pd.to_numeric(balance['totalDebt']) / 1e9,
+        f"Depreciation & Amort. ({currency} B)": pd.to_numeric(cashflow['depreciationAndAmortization']) / 1e9,
         # CapEx is negated (* -1) because Yahoo reports it as negative (cash outflow),
         # but we want to display it as a positive expenditure for readability.
-        "Capital Expenditures / CapEx ($B)": (pd.to_numeric(cashflow['capitalExpenditure']) * -1) / 1e9
+        f"Capital Expenditures / CapEx ({currency} B)": (pd.to_numeric(cashflow['capitalExpenditure']) * -1) / 1e9
     })
 
     print(audit_dataframe.to_string(index=False))
