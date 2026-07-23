@@ -41,10 +41,14 @@ Usage
     $ python dcf_ingestion.py
 """
 
+import sys
 import sqlite3
 from pathlib import Path
 import pandas as pd
 import yfinance as yf
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ticker_utils import validate_ticker, quoted_table_name
 
 # ─── DATABASE CONFIGURATION ──────────────────────────────────────────────────
 # The SQLite file lives inside the project_2_dcf/ folder to keep corporate
@@ -217,22 +221,38 @@ def load_or_ingest_asset_data(ticker):
     module: CAGR computation reads iloc[0] as the starting revenue and
     iloc[-1] as the ending revenue. If data were still in Yahoo's default
     newest-first order, the growth rate would be inverted.
+
+    Security
+    --------
+    `ticker` is validated via validate_ticker() before it ever reaches a SQL
+    string — it comes straight from user input (input().strip().upper() in
+    execute_valuation_audit_pipeline()), so building SQL from it unchecked
+    would be a SQL injection point. Table names are additionally built via
+    quoted_table_name(), which double-quotes the identifier — required
+    because tickers like "TATASTEEL.NS" contain "." characters that SQLite
+    would otherwise parse as a schema.table separator, not a literal
+    character, breaking the read on any non-US-suffixed ticker.
     """
+    ticker = validate_ticker(ticker)
+
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
 
     # ── Check if we already have cached data for this ticker ─────────────
     # We only check for the income table; if it exists, all three should exist
     # because they are always saved together in fetch_from_yahoo_finance().
+    # This check is a parameterized VALUE comparison (the "?" placeholder),
+    # not an identifier, so it was never vulnerable to the dot-parsing bug
+    # or to injection the way the f-string reads below were.
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f"{ticker}_income",))
     saved_table_exists = cursor.fetchone()
 
     if saved_table_exists:
         # ── CACHE HIT: Load from local database ─────────────────────────
         print(f"💾 Database Hit: Found saved records for {ticker} locally. Skipping internet download!")
-        income_df = pd.read_sql(f"SELECT * FROM {ticker}_income", conn)
-        balance_df = pd.read_sql(f"SELECT * FROM {ticker}_balance", conn)
-        cashflow_df = pd.read_sql(f"SELECT * FROM {ticker}_cashflow", conn)
+        income_df = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'income')}", conn)
+        balance_df = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'balance')}", conn)
+        cashflow_df = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'cashflow')}", conn)
         conn.close()
         return income_df, balance_df, cashflow_df
 
@@ -263,9 +283,12 @@ def load_or_ingest_asset_data(ticker):
     print(f"💾 Saving clean corporate files for {ticker} into local SQL storage...")
     conn = sqlite3.connect(DATABASE_PATH)
 
-    for df, name in zip([income_df, balance_df, cashflow_df], ['income', 'balance', 'cashflow']):
+    for df, suffix in zip([income_df, balance_df, cashflow_df], ['income', 'balance', 'cashflow']):
         df['date'] = df['date'].dt.strftime('%Y-%m-%d')
-        df.to_sql(f"{ticker}_{name}", conn, if_exists="replace", index=False)
+        # to_sql's `name` param is the bare table name, not a SQL fragment —
+        # it handles quoting internally, so the raw (already-validated)
+        # ticker is correct here, unlike the quoted_table_name() reads above.
+        df.to_sql(f"{ticker}_{suffix}", conn, if_exists="replace", index=False)
     conn.close()
 
     return income_df, balance_df, cashflow_df
@@ -287,7 +310,11 @@ def execute_valuation_audit_pipeline():
     user_ticker = input("📥 ENTER ANY TICKER YOU WANT TO VALUATE (e.g. AAPL, TSLA, AMD, INTC): ").strip().upper()
     print("==================================================================")
 
-    income, balance, cashflow = load_or_ingest_asset_data(user_ticker)
+    try:
+        income, balance, cashflow = load_or_ingest_asset_data(user_ticker)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return
 
     if income.empty:
         return

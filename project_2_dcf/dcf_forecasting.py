@@ -41,9 +41,13 @@ Usage
     forecast_df, cagr, margin = generate_fcff_projections("AAPL")
 """
 
+import sys
 import sqlite3
 from pathlib import Path
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ticker_utils import validate_ticker, quoted_table_name
 
 # ─── MODEL CONFIGURATION ─────────────────────────────────────────────────────
 # Resolved relative to this file, not the cwd — see dcf_ingestion.py.
@@ -75,16 +79,28 @@ def load_historical_cache(ticker):
 
     Raises
     ------
+    ValueError
+        If `ticker` fails validate_ticker() — see Security below.
     sqlite3.OperationalError
         If the tables for this ticker do not exist in the database (i.e.,
         the ingestion step was not run first).
+
+    Security
+    --------
+    `ticker` is validated via validate_ticker() before it's used to build
+    any SQL. It comes from user input (dcf_valuation.py's ticker prompt),
+    so building SQL directly from it would be a SQL injection point. Table
+    names are quoted via quoted_table_name() so ticker suffixes containing
+    "." (e.g. "TATASTEEL.NS") aren't misparsed as a schema.table separator.
     """
+    ticker = validate_ticker(ticker)
+
     conn = sqlite3.connect(DATABASE_PATH)
 
     # Read each of the three cached tables into separate DataFrames.
-    inc = pd.read_sql(f"SELECT * FROM {ticker}_income", conn)
-    bal = pd.read_sql(f"SELECT * FROM {ticker}_balance", conn)
-    cf = pd.read_sql(f"SELECT * FROM {ticker}_cashflow", conn)
+    inc = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'income')}", conn)
+    bal = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'balance')}", conn)
+    cf = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'cashflow')}", conn)
     conn.close()
 
     # Merge all three on the 'date' column so every fiscal year has
