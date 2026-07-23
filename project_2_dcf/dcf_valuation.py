@@ -65,6 +65,7 @@ import sys
 import sqlite3
 from pathlib import Path
 import pandas as pd
+import yfinance as yf
 
 # Make sure dcf_forecasting resolves regardless of cwd or how this script
 # was launched — relying on Python's implicit "script dir on sys.path[0]"
@@ -75,12 +76,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dcf_forecasting import generate_fcff_projections, load_historical_cache
 
 # ─── WACC & MARKET ENVIRONMENT PARAMETERS ─────────────────────────────────────
-# These constants define the capital markets assumptions for the valuation.
-# They are currently calibrated for an Apple (AAPL)-like company.
+# Beta, market cap, and shares outstanding are now pulled live per-ticker via
+# fetch_market_assumptions() below, instead of being hardcoded to Apple's
+# numbers regardless of which company is being valued. DEFAULT_BETA is the
+# only fallback *value* here — market cap and shares outstanding have no
+# defensible universal fallback (a $50B company and a $2.8T company are not
+# interchangeable), so fetch_market_assumptions() either derives them from
+# other Yahoo fields or raises a clear error; it never invents a number.
+DEFAULT_BETA = 1.0           # Market-neutral fallback when Yahoo reports no beta.
 RISK_FREE_RATE = 0.04        # 4.0%  — Yield on 10-year US Treasury bonds (the "zero-risk" baseline)
 EQUITY_RISK_PREMIUM = 0.05   # 5.0%  — Extra return stock investors demand over Treasuries
-ASSUMED_BETA = 1.20          # 1.20  — Stock's volatility vs. market (β > 1 = more volatile than S&P 500)
-MARKET_CAP_PROXY = 2800e9    # $2.8T — Assumed market capitalisation (used as the equity weight in WACC)
 ASSUMED_COST_OF_DEBT = 0.045 # 4.5%  — Pre-tax interest rate the company pays on its borrowings
 TAX_RATE = 0.21              # 21%   — US federal corporate tax rate
 
@@ -88,10 +93,103 @@ TAX_RATE = 0.21              # 21%   — US federal corporate tax rate
 # These control the "infinity" portion of the valuation.
 PERPETUAL_GROWTH_RATE = 0.025 # 2.5% — Rate at which FCFF grows forever after Year 5
                                #        Typically set near long-term GDP or inflation (2-3%)
-OUTSTANDING_SHARES = 15.4e9   # 15.4B — Number of shares outstanding for Apple
 
 
-def calculate_live_wacc(ticker):
+def fetch_market_assumptions(ticker):
+    """
+    Pull company-specific beta, market cap, and shares outstanding from
+    yf.Ticker(ticker).info.
+
+    Replaces the old hardcoded ASSUMED_BETA / MARKET_CAP_PROXY /
+    OUTSTANDING_SHARES constants, which were silently calibrated to Apple
+    and applied to every ticker regardless of company size — e.g. a $50B
+    company would get Apple's $2.8T equity weight in its WACC.
+
+    Parameters
+    ----------
+    ticker : str
+        Stock ticker symbol (e.g., "AAPL", "TATASTEEL.NS").
+
+    Returns
+    -------
+    dict
+        Keys: beta, market_cap, shares_outstanding, currency, country.
+
+    Raises
+    ------
+    ValueError
+        If shares_outstanding can't be determined by any means. There is no
+        defensible numeric fallback for a company's share count (unlike
+        beta, where "assume market-average" is a standard convention) —
+        without it there is no way to compute a per-share price, so this
+        fails loudly instead of dividing by a fabricated number.
+
+    Notes
+    -----
+    - beta: falls back to DEFAULT_BETA (market-neutral) with a warning if
+      Yahoo doesn't report one.
+    - market_cap: falls back to sharesOutstanding × currentPrice if Yahoo's
+      marketCap field is missing; raises if neither is available.
+    - shares_outstanding: Yahoo's `sharesOutstanding` field is frequently
+      None even for well-covered tickers, so this tries
+      impliedSharesOutstanding and floatShares as alternates before falling
+      back to marketCap ÷ currentPrice; raises only if all of those fail.
+    """
+    stock = yf.Ticker(ticker)
+    info = stock.info or {}
+
+    current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+
+    # ── Beta ───────────────────────────────────────────────────────────────
+    beta = info.get("beta")
+    if beta is None:
+        print(f"⚠️  {ticker}: Yahoo reports no beta. Falling back to DEFAULT_BETA={DEFAULT_BETA} (market-neutral).")
+        beta = DEFAULT_BETA
+
+    # ── Market Cap (equity weight in WACC) ───────────────────────────────────
+    market_cap = info.get("marketCap")
+    if market_cap is None:
+        fallback_shares = info.get("sharesOutstanding")
+        if fallback_shares and current_price:
+            market_cap = fallback_shares * current_price
+            print(f"⚠️  {ticker}: Yahoo reports no marketCap. Derived {market_cap:,.0f} from "
+                  f"sharesOutstanding × currentPrice instead.")
+        else:
+            raise ValueError(
+                f"{ticker}: Yahoo reports no marketCap, and there isn't enough data "
+                f"(sharesOutstanding, currentPrice) to derive one. Cannot compute the "
+                f"equity weight for WACC without it."
+            )
+
+    # ── Shares Outstanding (denominator for per-share price) ────────────────
+    # sharesOutstanding is frequently None on Yahoo even when other fields
+    # are populated — hence the fallback chain rather than a single lookup.
+    shares_outstanding = (
+        info.get("sharesOutstanding")
+        or info.get("impliedSharesOutstanding")
+        or info.get("floatShares")
+    )
+    if shares_outstanding is None and market_cap and current_price:
+        shares_outstanding = market_cap / current_price
+        print(f"⚠️  {ticker}: Yahoo reports no sharesOutstanding, impliedSharesOutstanding, or "
+              f"floatShares. Derived {shares_outstanding:,.0f} from marketCap ÷ currentPrice instead.")
+    if shares_outstanding is None:
+        raise ValueError(
+            f"{ticker}: Yahoo reports no sharesOutstanding, impliedSharesOutstanding, or "
+            f"floatShares, and there isn't enough data (marketCap, currentPrice) to derive one. "
+            f"Cannot compute intrinsic value per share without a share count."
+        )
+
+    return {
+        "beta": beta,
+        "market_cap": market_cap,
+        "shares_outstanding": shares_outstanding,
+        "currency": info.get("financialCurrency") or info.get("currency"),
+        "country": info.get("country"),
+    }
+
+
+def calculate_live_wacc(ticker, market_assumptions):
     """
     Compute the Weighted Average Cost of Capital (WACC) for the given ticker.
 
@@ -117,42 +215,50 @@ def calculate_live_wacc(ticker):
     ----------
     ticker : str
         Stock ticker symbol whose debt data to load from the cache.
+    market_assumptions : dict
+        Output of fetch_market_assumptions(ticker) — supplies beta and
+        market_cap. Passed in rather than fetched again here so
+        run_master_valuation_app() only hits the yfinance .info endpoint once.
 
     Returns
     -------
     tuple[float, float]
         (wacc, latest_debt_raw)
         - wacc : float — The computed WACC as a decimal fraction (e.g., 0.09 = 9%).
-        - latest_debt_raw : float — The most recent total debt in raw dollars.
+        - latest_debt_raw : float — The most recent total debt, in the
+          company's own reporting currency (see market_assumptions["currency"]).
 
     Notes
     -----
-    - The equity weight uses the hardcoded MARKET_CAP_PROXY, not a live market cap.
-      This means the model is calibrated for Apple; using it on a $50B company
-      with a $2.8T equity weight will produce an inaccurate WACC.
-    - The debt weight IS semi-dynamic — it reads the latest totalDebt from
-      the cached database, so it reflects the actual debt reported by Yahoo.
+    - The equity weight uses market_assumptions["market_cap"], pulled live
+      from Yahoo per-ticker — see fetch_market_assumptions() for how it's
+      derived and what happens when Yahoo doesn't report it directly.
+    - The debt weight reads the latest totalDebt from the cached database,
+      so it reflects the actual debt reported by Yahoo for this company.
+    - Market cap and total debt are assumed to be in the same currency
+      (both come from Yahoo's data for this ticker) — WACC itself is a
+      dimensionless blend of rates, so currency doesn't affect it directly,
+      but the caller must not mix market_assumptions from one ticker with
+      hist_df from another.
     """
     hist_df = load_historical_cache(ticker)
 
     # ── Step 1: Cost of Equity via CAPM ──────────────────────────────────
     # Ke = Rf + β × ERP
-    # Example: 0.04 + 1.20 × 0.05 = 0.10 (10%)
-    # This says: "Equity investors demand at least a 10% return to hold this stock."
-    cost_of_equity = RISK_FREE_RATE + (ASSUMED_BETA * EQUITY_RISK_PREMIUM)
+    cost_of_equity = RISK_FREE_RATE + (market_assumptions["beta"] * EQUITY_RISK_PREMIUM)
 
     # ── Step 2: Read the latest total debt from the database ─────────────
     latest_debt = float(hist_df['totalDebt'].iloc[-1])
 
     # ── Step 3: Compute capital structure weights ────────────────────────
     # V = E + D (total value of all capital)
-    total_capital = MARKET_CAP_PROXY + latest_debt
-    weight_of_equity = MARKET_CAP_PROXY / total_capital  # E/V — typically ~95% for Apple
-    weight_of_debt = latest_debt / total_capital          # D/V — typically ~5% for Apple
+    market_cap = market_assumptions["market_cap"]
+    total_capital = market_cap + latest_debt
+    weight_of_equity = market_cap / total_capital  # E/V
+    weight_of_debt = latest_debt / total_capital     # D/V
 
     # ── Step 4: After-tax Cost of Debt ───────────────────────────────────
     # Interest payments are tax-deductible, creating a "tax shield".
-    # After-tax Kd = Kd × (1 − Tax) = 0.045 × 0.79 = 0.03555 (3.555%)
     after_tax_cost_of_debt = ASSUMED_COST_OF_DEBT * (1 - TAX_RATE)
 
     # ── Step 5: Blend into WACC ──────────────────────────────────────────
@@ -185,6 +291,14 @@ def run_master_valuation_app():
 
     try:
         # ═══════════════════════════════════════════════════════════════════
+        # PHASE 0: Pull company-specific market assumptions (beta, market
+        # cap, shares outstanding) — replaces the old Apple-hardcoded
+        # constants. See fetch_market_assumptions()'s docstring for the
+        # fallback chain and when it raises instead of guessing.
+        # ═══════════════════════════════════════════════════════════════════
+        market_assumptions = fetch_market_assumptions(user_ticker)
+
+        # ═══════════════════════════════════════════════════════════════════
         # PHASE 1: Generate FCFF projections (calls Stage 2)
         # ═══════════════════════════════════════════════════════════════════
         forecast_df, cagr, margin = generate_fcff_projections(user_ticker)
@@ -192,10 +306,12 @@ def run_master_valuation_app():
         # ═══════════════════════════════════════════════════════════════════
         # PHASE 2: Compute WACC (the discount rate)
         # ═══════════════════════════════════════════════════════════════════
-        wacc_rate, latest_debt_raw = calculate_live_wacc(user_ticker)
+        wacc_rate, latest_debt_raw = calculate_live_wacc(user_ticker, market_assumptions)
 
         # ── Print the computed model parameters ──────────────────────────
         print(f"\n📈 INITIALIZING VALUATION FOR STRUCTURE: {user_ticker}")
+        print(f" -> Beta: {market_assumptions['beta']:.2f}  |  Market Cap: {market_assumptions['market_cap']:,.0f}  "
+              f"|  Shares Outstanding: {market_assumptions['shares_outstanding']:,.0f}")
         print(f" -> Computed Geometric Revenue CAGR: {cagr*100:.2f}%")
         print(f" -> Computed Baseline Operating Margin: {margin*100:.2f}%")
         print(f" -> Computed Cost of Capital (WACC): {wacc_rate*100:.2f}%")
@@ -280,7 +396,7 @@ def run_master_valuation_app():
 
         # F. Intrinsic Share Price = Equity Value / Outstanding Shares
         #    This is the model's answer to "what should one share be worth?"
-        intrinsic_share_price = (equity_value * 1e9) / OUTSTANDING_SHARES
+        intrinsic_share_price = (equity_value * 1e9) / market_assumptions["shares_outstanding"]
 
         # ═══════════════════════════════════════════════════════════════════
         # DISPLAY: The ultimate investment verdict
