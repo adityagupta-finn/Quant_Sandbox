@@ -13,10 +13,10 @@ ENGINE_PATH = BASE_DIR / "engine"
 sys.path.insert(0, str(BASE_DIR))
 from pair_config import TICKER_A, TICKER_B
 
-# --- 1. ARCHITECTURAL CONFIGURATION ---
+# --- Page config ---
 st.set_page_config(page_title="Pairs Arbitrage & Risk Engine", layout="wide")
 
-# Institutional Slate-Dark Aesthetic via Custom CSS Injection
+# Dark theme CSS
 st.markdown("""
     <style>
         .reportview-container { background: #0b0f19; }
@@ -27,27 +27,26 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Cross-Asset Pairs Arbitrage & Risk Engine (CAPRE)")
-st.caption("Low-latency time-series analysis engine and compiled bare-metal execution interface.")
+st.title("Cross-Asset Pairs Arbitrage & Risk Engine (CAPRE)")
+st.caption("Pairs trading signal dashboard: rolling OLS hedge ratio, cointegration test, and Z-score.")
 st.markdown("---")
 
-# --- 2. RISK SPECIFICATION & TELEMETRY SIDEBAR ---
-st.sidebar.header("🔧 Risk Parameters & Constraints")
+# --- Sidebar: risk parameters ---
+st.sidebar.header("Risk Parameters & Constraints")
 
 # Operational Inputs
 z_threshold = st.sidebar.slider("Z-Score Entry Threshold (σ)", min_value=1.5, max_value=3.0, value=2.0, step=0.1)
 enforce_coin = st.sidebar.toggle("Enforce Cointegration Constraints", value=True)
 
-# Establish connection to the local database cluster
+# Connect to the local database
 conn = sqlite3.connect(DB_PATH)
 try:
     # Fetch time-series array ordered chronologically
     df = pd.read_sql("SELECT * FROM pairs_data ORDER BY Date ASC", conn)
     latest_row = df.iloc[-1]
     
-    # Render Telemetry inside Sidebar Panel
     st.sidebar.markdown("---")
-    st.sidebar.header("📈 Model Statistics")
+    st.sidebar.header("Model Statistics")
     st.sidebar.metric(label="Dynamic OLS Hedge Ratio (β)", value=f"{latest_row['Beta']:.4f}")
     
     # Statistical Significance Monitor -- only render this if the ADF test
@@ -67,7 +66,7 @@ except Exception as e:
     st.sidebar.warning("Awaiting market data population...")
     df = pd.DataFrame()
 
-# --- 3. CORE METRICS DISPLAY ---
+# --- Core metrics ---
 if not df.empty:
     m_col1, m_col2, m_col3 = st.columns(3)
     
@@ -84,8 +83,8 @@ if not df.empty:
 
     st.markdown("---")
 
-    # --- 4. INTERACTIVE DISPERSION & REGIME CHARTING ---
-    st.subheader("Linear Regression Residual Spread & Boundary Conditions")
+    # --- Spread chart ---
+    st.subheader("Residual Spread & Boundary Conditions")
     
     fig = go.Figure()
 
@@ -111,22 +110,21 @@ if not df.empty:
     
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 5. AUDITABLE RECENT DATA LEDGER ---
-    st.subheader("Data Audit Ledger (Most Recent Observations)")
-    # Render the last 5 rows of data in a clean data grid
+    # --- Recent observations ---
+    st.subheader("Recent Observations")
     audit_df = df.tail(5)[['Date', f'{TICKER_A}_Close', f'{TICKER_B}_Close', 'Beta', 'Spread', 'Z_Score', 'ADF_P_Value']]
     st.dataframe(audit_df, use_container_width=True, hide_index=True)
     st.markdown("---")
 
-    # --- 6. SUBPROCESS EXECUTION CONSOLE ---
-    st.subheader("Compiled Core Execution Pipeline")
-    
+    # --- Run the C++ engine ---
+    st.subheader("Execution Engine")
+
     btn_col, spacer_col = st.columns([1, 3])
     with btn_col:
-        trigger_scan = st.button("🔧 EXECUTE RISK ENGINE")
-        
+        trigger_scan = st.button("Run Engine")
+
     if trigger_scan:
-        st.markdown("**Core Binary Run-time Output Stream:**")
+        st.markdown("**Engine output:**")
         
         # Invoke compiled C++ module with string-vector arguments (argv)
         process = subprocess.Popen(

@@ -22,7 +22,7 @@ def run_pipeline():
     secret_key = os.getenv("ALPACA_SECRET_KEY")
 
     if not api_key or not secret_key:
-        print("CRITICAL ERROR: API Keys missing from .env file!")
+        print("Error: API keys missing from .env file.")
         return
 
     # 2. Authenticate the Client
@@ -38,17 +38,17 @@ def run_pipeline():
         start=start_date
     )
     
-    print("Connecting to Alpaca Market Data Servers...")
+    print("Connecting to Alpaca...")
     try:
-        # 4. Fetch data and convert instantly to a DataFrame
+        # 4. Fetch data and convert to a DataFrame
         bars = client.get_stock_bars(request_params)
         df = bars.df
-        
+
         if df.empty:
             print("No data returned from the exchange.")
             return
-            
-        print("Data fetched successfully! Structuring database...")
+
+        print("Data fetched. Writing to database...")
         
         # 5. Process and split data into individual SQL tables
         conn = sqlite3.connect(str(DB_PATH))
@@ -69,10 +69,10 @@ def run_pipeline():
             print(f"--> Stored {len(clean_df)} rows for {ticker}")
             
         conn.close()
-        print("Database connection closed. Pipeline successfully executed.")
-        
+        print("Done.")
+
     except Exception as e:
-        print(f"Pipeline Execution Failed: {e}")
+        print(f"Pipeline failed: {e}")
 
 if __name__ == "__main__":
     run_pipeline()

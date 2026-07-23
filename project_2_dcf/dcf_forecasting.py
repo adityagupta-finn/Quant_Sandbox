@@ -1,43 +1,17 @@
 """
-dcf_forecasting.py — Stage 2 of the DCF Valuation Pipeline
-============================================================
+dcf_forecasting.py — Stage 2 of the DCF pipeline.
 
-This module builds the forecasting engine that projects future Free Cash Flow
-to Firm (FCFF) based on historical financial data. It sits between the data
-ingestion layer (dcf_ingestion.py) and the valuation layer (dcf_valuation.py).
+Loads the merged historical financials from the SQLite cache, computes
+revenue CAGR and average operating/D&A/CapEx margins from that history,
+and projects 5 years of Free Cash Flow to Firm (FCFF) forward:
+    FCFF = NOPAT + D&A − CapEx − ΔNWC
 
-Responsibilities
-----------------
-  1. Load the merged historical financial data from the SQLite cache.
-  2. Compute key operational drivers from the historical data:
-     - Revenue CAGR (Compound Annual Growth Rate)
-     - Average operating margin (EBIT / Revenue)
-     - Average D&A-to-revenue ratio
-     - Average CapEx-to-revenue ratio
-  3. Project 5 years of future FCFF using the formula:
-         FCFF = NOPAT + D&A − CapEx − ΔNWC
+Assumes those historical averages hold going forward — flat margins and
+one constant growth rate — which is a poor fit for a cyclical or
+volatile business. ΔNWC is simplified to a flat 1% of revenue rather
+than derived from actual working-capital changes.
 
-Financial Theory
-----------------
-FCFF (Free Cash Flow to Firm) represents the cash available to ALL capital
-providers (both equity and debt holders) after the company has:
-  - Paid its operating expenses (→ EBIT)
-  - Paid its taxes (→ NOPAT = EBIT × (1 − Tax))
-  - Added back non-cash charges (→ + D&A)
-  - Reinvested in the business (→ − CapEx)
-  - Funded working capital needs (→ − ΔNWC)
-
-FCFF is the fundamental input to the DCF valuation; it's what gets discounted
-back to present value in Stage 3.
-
-Dependencies
-------------
-    - sqlite3 : Standard library; reads cached data from local database.
-    - pandas  : DataFrame manipulation and SQL I/O.
-
-Usage
------
-    # Called programmatically by dcf_valuation.py:
+Called programmatically by dcf_valuation.py:
     forecast_df, cagr, margin = generate_fcff_projections("AAPL")
 """
 
@@ -108,7 +82,7 @@ def _drop_incomplete_years(df):
             int(row['year']): [c for c in REQUIRED_HISTORICAL_COLUMNS if pd.isna(row[c])]
             for _, row in df.loc[incomplete_mask].iterrows()
         }
-        print(f"⚠️  Dropping {len(dropped_years)} incomplete fiscal year(s) from the historical "
+        print(f"WARNING: dropping {len(dropped_years)} incomplete fiscal year(s) from the historical "
               f"window — missing data: {missing_by_year}. These would otherwise silently poison "
               f"CAGR and every downstream projection with NaN.")
         df = df.loc[~incomplete_mask].reset_index(drop=True)
@@ -318,8 +292,7 @@ def generate_fcff_projections(ticker, tax_rate=TAX_RATE):
     forecast_records = []
     running_rev = latest_rev  # This variable compounds forward each iteration
 
-    # ── THE CONVEYOR BELT FORECAST LOOP ──────────────────────────────────
-    # Each iteration represents one future fiscal year (Year 1 through Year 5).
+    # Each iteration is one future fiscal year (Year 1 through Year 5).
     # Revenue grows by CAGR each step; all other metrics are derived as
     # fixed percentages of that projected revenue.
     for step in range(1, FORECAST_YEARS + 1):
@@ -341,13 +314,12 @@ def generate_fcff_projections(ticker, tax_rate=TAX_RATE):
         #    D&A:   Added back because it reduced EBIT but no cash actually left.
         #    CapEx: Subtracted because it represents real cash spent on assets.
         #    ΔNWC:  Cash trapped in day-to-day operations (inventory, receivables).
-        #           Simplified here to 1% of revenue as a stable operational estimate.
+        #           Simplified here to a flat 1% of revenue.
         projected_dna = running_rev * avg_dna_pct
         projected_capex = running_rev * avg_capex_pct
-        projected_nwc_change = running_rev * 0.01  # Stable 1% NWC operational trap
+        projected_nwc_change = running_rev * 0.01  # Flat 1% of revenue
 
-        # 4. FCFF: The Master Formula
-        #    FCFF = NOPAT + D&A − CapEx − ΔNWC
+        # 4. FCFF = NOPAT + D&A − CapEx − ΔNWC
         #    This is the cash flow available to ALL investors (equity + debt).
         fcff = nopat + projected_dna - projected_capex - projected_nwc_change
 

@@ -1,44 +1,17 @@
 """
-dcf_ingestion.py — Stage 1 of the DCF Valuation Pipeline
-=========================================================
+dcf_ingestion.py — Stage 1 of the DCF pipeline.
 
-This module handles the complete data acquisition and storage lifecycle for the
-Discounted Cash Flow (DCF) valuation engine. It is responsible for:
+Pulls the income statement, balance sheet, and cash flow statement for a
+ticker via yfinance, reshapes them to one row per fiscal year, and caches
+the result in a local SQLite database (project_2_dcf/corporate_data.db)
+so later runs don't re-hit the network. Column names and coverage depend
+entirely on what yfinance returns, which varies by company and can have
+gaps (see dcf_forecasting.py's handling of incomplete years).
 
-  1. Connecting to Yahoo Finance via the `yfinance` library and pulling the
-     three core financial statements (Income Statement, Balance Sheet, Cash Flow).
-  2. Cleaning and reshaping the raw data into a standardised format suitable
-     for quantitative analysis (each row = one fiscal year).
-  3. Caching the cleaned data in a local SQLite database to avoid redundant
-     network calls on subsequent runs (cache-aside pattern).
-  4. Providing a standalone audit entry point that prints a human-readable
-     summary of the historical financials.
-
-Data Flow
----------
-    Yahoo Finance API
-        ↓ (yfinance)
-    Raw DataFrames (columns = dates, rows = line items)
-        ↓ (.T transpose)
-    Flipped DataFrames (rows = fiscal years, columns = metrics)
-        ↓ (extract & clean)
-    Three clean DataFrames: income, balance, cashflow
-        ↓ (sort chronologically)
-    SQLite tables: {TICKER}_income, {TICKER}_balance, {TICKER}_cashflow
-
-Dependencies
-------------
-    - sqlite3   : Standard library; local database engine.
-    - pandas    : DataFrame manipulation and SQL I/O.
-    - yfinance  : Open-source Yahoo Finance scraper.
-
-Usage
------
-    # As a library (called by dcf_forecasting.py):
+As a library:
     income_df, balance_df, cashflow_df = load_or_ingest_asset_data("AAPL")
 
-    # As a standalone script (prints the audit table):
-    $ python dcf_ingestion.py
+As a standalone script (prints an audit table): $ python dcf_ingestion.py
 """
 
 import sys
@@ -103,7 +76,7 @@ def fetch_from_yahoo_finance(ticker):
       Finance uses varying column names across companies, so we try the
       more verbose names first and fall back to shorter alternatives.
     """
-    print(f"📡 Connecting to Yahoo Finance to grab files for: {ticker}...")
+    print(f"Connecting to Yahoo Finance for: {ticker}...")
 
     try:
         # ── Step 0: Create the yfinance Ticker object ────────────────────
@@ -122,7 +95,7 @@ def fetch_from_yahoo_finance(ticker):
         # ── Step 2: Validate that we received non-empty data ─────────────
         # If any statement is empty, the ticker is likely invalid or delisted.
         if raw_income.empty or raw_balance.empty or raw_cashflow.empty:
-            print("⚠️ Ingestion Warning: One or more financial statements came back completely empty.")
+            print("Ingestion warning: one or more financial statements came back completely empty.")
             return pd.DataFrame()
 
         # ── Step 3: Transpose — swap rows and columns ────────────────────
@@ -185,7 +158,7 @@ def fetch_from_yahoo_finance(ticker):
         return final_income, final_balance, final_cashflow
 
     except Exception as e:
-        print(f"❌ Something went wrong while parsing the web data: {e}")
+        print(f"Error while parsing the web data: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 
@@ -249,7 +222,7 @@ def load_or_ingest_asset_data(ticker):
 
     if saved_table_exists:
         # ── CACHE HIT: Load from local database ─────────────────────────
-        print(f"💾 Database Hit: Found saved records for {ticker} locally. Skipping internet download!")
+        print(f"Database hit: found saved records for {ticker} locally. Skipping internet download.")
         income_df = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'income')}", conn)
         balance_df = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'balance')}", conn)
         cashflow_df = pd.read_sql(f"SELECT * FROM {quoted_table_name(ticker, 'cashflow')}", conn)
@@ -257,13 +230,13 @@ def load_or_ingest_asset_data(ticker):
         return income_df, balance_df, cashflow_df
 
     # ── CACHE MISS: Fetch from Yahoo Finance ─────────────────────────────
-    print(f"🔍 Database Miss: No local files found for {ticker}. Fetching fresh files from the web...")
+    print(f"Database miss: no local files found for {ticker}. Fetching fresh files from the web...")
     conn.close()
 
     income_df, balance_df, cashflow_df = fetch_from_yahoo_finance(ticker)
 
     if income_df.empty:
-        print("❌ Error: Could not compile financial matrices. Pipeline stopped.")
+        print("Error: could not compile financial data. Pipeline stopped.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     # ── Sort chronologically: oldest fiscal year first ────────────────────
@@ -280,7 +253,7 @@ def load_or_ingest_asset_data(ticker):
     # ── Persist to SQLite ────────────────────────────────────────────────
     # Dates are stored as ISO strings (YYYY-MM-DD) for portability.
     # if_exists="replace" ensures re-ingestion overwrites stale data.
-    print(f"💾 Saving clean corporate files for {ticker} into local SQL storage...")
+    print(f"Saving clean corporate files for {ticker} into local SQL storage...")
     conn = sqlite3.connect(DATABASE_PATH)
 
     for df, suffix in zip([income_df, balance_df, cashflow_df], ['income', 'balance', 'cashflow']):
@@ -313,20 +286,19 @@ def execute_valuation_audit_pipeline():
     it is NOT called by the forecasting or valuation modules.
     """
     print("==================================================================")
-    user_ticker = input("📥 ENTER ANY TICKER YOU WANT TO VALUATE (e.g. AAPL, TSLA, AMD, INTC): ").strip().upper()
+    user_ticker = input("Enter any ticker to audit (e.g. AAPL, TSLA, AMD, INTC): ").strip().upper()
     print("==================================================================")
 
     try:
         income, balance, cashflow = load_or_ingest_asset_data(user_ticker)
     except ValueError as e:
-        print(f"❌ {e}")
+        print(f"Error: {e}")
         return
 
     if income.empty:
         return
 
-    print("\n✅ DATA PIPELINE BRIDGE CONNECTED SUCCESSFULLY.")
-    print(f"Analyzing a {len(income)}-Year Historical Accounting Horizon.")
+    print(f"\nLoaded {len(income)} fiscal years of historical data for {user_ticker}.")
     print("------------------------------------------------------------------")
 
     # ── Look up the company's actual reporting currency ───────────────────
@@ -342,7 +314,7 @@ def execute_valuation_audit_pipeline():
     # Corporate financials are typically in the range of 10^9 – 10^12 (in
     # whatever currency the company reports in). Dividing by 1e9 converts
     # them to a familiar "X.XX Billion" format.
-    print(f"📊 HISTORICAL AUDIT SUMMARY LEDGER FOR {user_ticker} (figures in {currency}):")
+    print(f"Historical audit summary for {user_ticker} (figures in {currency}):")
 
     fiscal_years = pd.to_datetime(income['date']).dt.year
 
@@ -359,7 +331,6 @@ def execute_valuation_audit_pipeline():
 
     print(audit_dataframe.to_string(index=False))
     print("==================================================================")
-    print("Historical accounting fields verified. Ready to build the valuation forecasting models!")
 
 
 if __name__ == "__main__":

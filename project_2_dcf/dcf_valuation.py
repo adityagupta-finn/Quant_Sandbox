@@ -1,71 +1,23 @@
 """
-dcf_valuation.py — Stage 3 of the DCF Valuation Pipeline
-==========================================================
+dcf_valuation.py — Stage 3 of the DCF pipeline.
 
-This is the final and most important module in the DCF engine. It takes the
-FCFF projections from Stage 2 (dcf_forecasting.py) and converts them into a
-single number: the **intrinsic value per share**.
+Takes the FCFF projections from dcf_forecasting.py, computes WACC from
+live per-ticker market data (beta, market cap, latest debt) via CAPM,
+discounts the 5-year forecast plus a Gordon Growth terminal value back to
+the present, and divides by shares outstanding for an intrinsic share
+price.
 
-The Valuation Methodology
--------------------------
-The process follows the textbook DCF framework used by investment banks:
+Tax rate, risk-free rate, and equity risk premium are resolved from the
+ticker's own jurisdiction (see resolve_jurisdiction_defaults()) rather
+than hardcoded to one country's numbers — applying US assumptions to a
+non-US company doesn't error, it just produces a meaningless number.
 
-  1. **Discount the explicit forecast period** (Years 1-5):
-         PV = FCFF_t / (1 + WACC)^t
-     Each future cash flow is "shrunk" back to today's value.
+This is a single-point estimate: one WACC, one growth rate, no
+sensitivity range. It also assumes FCFF grows at a constant rate forever
+past Year 5, standard for a Gordon Growth terminal value but a real
+simplification.
 
-  2. **Calculate Terminal Value** (Year 6 to infinity):
-     Using the Gordon Growth Model:
-         TV = (FCFF_5 × (1 + g)) / (WACC − g)
-     Then discount it back to today:
-         PV(TV) = TV / (1 + WACC)^5
-
-  3. **Sum everything** to get Enterprise Value:
-         EV = Σ PV(FCFF_t) + PV(TV)
-
-  4. **Subtract Debt** to get Equity Value (what shareholders own):
-         Equity Value = EV − Total Debt
-
-  5. **Divide by shares** to get the intrinsic price:
-         Share Price = Equity Value / Shares Outstanding
-
-Key Financial Concepts
-----------------------
-  WACC (Weighted Average Cost of Capital):
-      The blended rate of return demanded by all capital providers. It's the
-      "discount rate" or "hurdle rate" — the rate at which future cash flows
-      lose value when brought back to the present. Computed via:
-          WACC = (E/V × Ke) + (D/V × Kd × (1 − Tax))
-      Where Ke (Cost of Equity) comes from the CAPM model.
-
-  CAPM (Capital Asset Pricing Model):
-      Ke = Risk-Free Rate + β × Equity Risk Premium
-      The Risk-Free Rate is the LOCAL risk-free benchmark for the company's
-      own jurisdiction — e.g. the 10-year US Treasury yield for a US
-      company, the 10-year Indian G-sec yield for an Indian one. Applying
-      one jurisdiction's risk-free rate to another jurisdiction's company
-      (along with its tax rate) produces a WACC — and therefore an intrinsic
-      share price — with no real-world meaning, even though nothing errors.
-      See resolve_jurisdiction_defaults() for how this module picks a rate.
-      β measures the stock's volatility relative to its own market; ERP is
-      the excess return investors demand for holding stocks over risk-free
-      bonds.
-
-  Gordon Growth Model:
-      Assumes the company grows at a constant rate 'g' forever after the
-      explicit forecast period. This is a simplification — no company truly
-      grows forever — but it's mathematically tractable and widely used.
-
-Dependencies
-------------
-    - sqlite3 : Standard library; reads cached data.
-    - pandas  : DataFrame manipulation.
-    - dcf_forecasting : The Stage 2 module providing FCFF projections.
-
-Usage
------
-    $ python dcf_valuation.py
-    → Prompts for a ticker, then outputs the full valuation.
+Usage: $ python dcf_valuation.py
 """
 
 import sys
@@ -161,7 +113,7 @@ def resolve_jurisdiction_defaults(ticker, country):
     if country in JURISDICTION_DEFAULTS:
         return JURISDICTION_DEFAULTS[country], True
 
-    print(f"⚠️  {ticker}: no jurisdiction-specific tax/risk-free/ERP defaults for "
+    print(f"WARNING: {ticker}: no jurisdiction-specific tax/risk-free/ERP defaults for "
           f"country={country!r}. Falling back to GLOBAL_DEFAULT (US-calibrated: "
           f"{GLOBAL_DEFAULT['tax_rate']*100:.2f}% tax, {GLOBAL_DEFAULT['risk_free_rate']*100:.2f}% "
           f"risk-free) — likely inaccurate for this company. Pass tax_rate / risk_free_rate / "
@@ -217,7 +169,7 @@ def fetch_market_assumptions(ticker):
     # ── Beta ───────────────────────────────────────────────────────────────
     beta = info.get("beta")
     if beta is None:
-        print(f"⚠️  {ticker}: Yahoo reports no beta. Falling back to DEFAULT_BETA={DEFAULT_BETA} (market-neutral).")
+        print(f"WARNING: {ticker}: Yahoo reports no beta. Falling back to DEFAULT_BETA={DEFAULT_BETA} (market-neutral).")
         beta = DEFAULT_BETA
 
     # ── Market Cap (equity weight in WACC) ───────────────────────────────────
@@ -226,7 +178,7 @@ def fetch_market_assumptions(ticker):
         fallback_shares = info.get("sharesOutstanding")
         if fallback_shares and current_price:
             market_cap = fallback_shares * current_price
-            print(f"⚠️  {ticker}: Yahoo reports no marketCap. Derived {market_cap:,.0f} from "
+            print(f"WARNING: {ticker}: Yahoo reports no marketCap. Derived {market_cap:,.0f} from "
                   f"sharesOutstanding × currentPrice instead.")
         else:
             raise ValueError(
@@ -245,7 +197,7 @@ def fetch_market_assumptions(ticker):
     )
     if shares_outstanding is None and market_cap and current_price:
         shares_outstanding = market_cap / current_price
-        print(f"⚠️  {ticker}: Yahoo reports no sharesOutstanding, impliedSharesOutstanding, or "
+        print(f"WARNING: {ticker}: Yahoo reports no sharesOutstanding, impliedSharesOutstanding, or "
               f"floatShares. Derived {shares_outstanding:,.0f} from marketCap ÷ currentPrice instead.")
     if shares_outstanding is None:
         raise ValueError(
@@ -348,8 +300,8 @@ def calculate_live_wacc(ticker, market_assumptions, tax_rate, risk_free_rate, eq
 
     # ── Step 5: Blend into WACC ──────────────────────────────────────────
     # WACC = (E/V × Ke) + (D/V × Kd_aftertax)
-    # This is the "discount gravity" — the rate at which future cash flows
-    # lose value when pulled back to the present.
+    # This is the rate at which future cash flows are discounted back to
+    # the present.
     wacc = (weight_of_equity * cost_of_equity) + (weight_of_debt * after_tax_cost_of_debt)
     return wacc, latest_debt
 
@@ -391,19 +343,14 @@ def run_master_valuation_app(tax_rate=None, risk_free_rate=None, equity_risk_pre
     labeled instead of silently mislabeled as dollars.
     """
     print("==================================================================")
-    user_ticker = input("📥 ENTER TARGET TICKER FOR FULL DCF VALUATION: ").strip().upper()
+    user_ticker = input("Enter ticker for full DCF valuation: ").strip().upper()
     print("==================================================================")
 
     try:
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 0: Pull company-specific market assumptions (beta, market
-        # cap, shares outstanding, currency, country) — replaces the old
-        # Apple-hardcoded constants. See fetch_market_assumptions()'s
-        # docstring for the fallback chain and when it raises instead of
-        # guessing. Then resolve jurisdiction-appropriate tax/risk-free/ERP
-        # defaults from the ticker's own country, honoring any explicit
-        # overrides passed in.
-        # ═══════════════════════════════════════════════════════════════════
+        # Pull company-specific market assumptions (beta, market cap, shares
+        # outstanding, currency, country), then resolve jurisdiction-
+        # appropriate tax/risk-free/ERP defaults from the ticker's own
+        # country, honoring any explicit overrides passed in.
         market_assumptions = fetch_market_assumptions(user_ticker)
         currency = market_assumptions["currency"] or "USD"
         country = market_assumptions["country"]
@@ -415,22 +362,16 @@ def run_master_valuation_app(tax_rate=None, risk_free_rate=None, equity_risk_pre
             equity_risk_premium if equity_risk_premium is not None else jurisdiction_defaults["equity_risk_premium"]
         )
 
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 1: Generate FCFF projections (calls Stage 2)
-        # ═══════════════════════════════════════════════════════════════════
+        # Generate FCFF projections (Stage 2), then compute WACC.
         forecast_df, cagr, margin = generate_fcff_projections(user_ticker, tax_rate=resolved_tax_rate)
-
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 2: Compute WACC (the discount rate)
-        # ═══════════════════════════════════════════════════════════════════
         wacc_rate, latest_debt_raw = calculate_live_wacc(
             user_ticker, market_assumptions, resolved_tax_rate, resolved_risk_free_rate, resolved_equity_risk_premium
         )
 
         # ── Print the computed model parameters ──────────────────────────
-        print(f"\n📈 INITIALIZING VALUATION FOR STRUCTURE: {user_ticker}")
+        print(f"\nValuation for: {user_ticker}")
         print(f" -> Jurisdiction: {country or 'Unknown'}"
-              f"{' (matched)' if matched_jurisdiction else ' (⚠️  no match — using GLOBAL_DEFAULT, see warning above)'}"
+              f"{' (matched)' if matched_jurisdiction else ' (no match — using GLOBAL_DEFAULT, see warning above)'}"
               f"  |  Reporting Currency: {currency}")
         print(f" -> Beta: {market_assumptions['beta']:.2f}  |  Market Cap: {currency} {market_assumptions['market_cap']:,.0f}  "
               f"|  Shares Outstanding: {market_assumptions['shares_outstanding']:,.0f}")
@@ -441,15 +382,7 @@ def run_master_valuation_app(tax_rate=None, risk_free_rate=None, equity_risk_pre
         print(f" -> Computed Cost of Capital (WACC): {wacc_rate*100:.2f}%")
         print("------------------------------------------------------------------\n")
 
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 3: Discount each year's FCFF to present value
-        # ═══════════════════════════════════════════════════════════════════
-        # The Time Value of Money principle: $100 received in Year 3 is worth
-        # less than $100 today, because you could invest $100 today and earn
-        # returns. The further in the future, the less it's worth now.
-        #
-        # Formula: PV = FV / (1 + WACC)^t
-        #   where t = number of years from now.
+        # Discount each forecast year's FCFF to present value: PV = FV / (1 + WACC)^t
         valuation_rows = []
 
         for idx, row in forecast_df.iterrows():
@@ -478,17 +411,10 @@ def run_master_valuation_app(tax_rate=None, risk_free_rate=None, equity_risk_pre
         print(summary_df.to_string(index=False))
         print("------------------------------------------------------------------")
 
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 4: Terminal Value — the "infinity" calculation
-        # ═══════════════════════════════════════════════════════════════════
-        # After the 5-year explicit forecast, we need to capture ALL future
-        # value from Year 6 to infinity. We use the Gordon Growth Model:
-        #
+        # Terminal Value (Year 6 onward) via the Gordon Growth Model:
         #   TV = (FCFF_Year5 × (1 + g)) / (WACC − g)
-        #
-        # This formula assumes FCFF grows at a constant rate 'g' forever.
-        # CRITICAL: g MUST be less than WACC, otherwise the formula produces
-        # a negative or infinite value (which is economically nonsensical).
+        # g must be less than WACC, otherwise this produces a negative or
+        # undefined value.
 
         # A. Sum the present values of the 5-year explicit window.
         explicit_pv_sum = summary_df[f'Present Value (PV) ({currency} B)'].sum()
@@ -503,10 +429,7 @@ def run_master_valuation_app(tax_rate=None, risk_free_rate=None, equity_risk_pre
         #    The terminal value occurs at Year 5, so we discount by (1 + WACC)^5.
         pv_of_terminal_value = (terminal_value_year_5 / 1e9) / ((1 + wacc_rate) ** 5)
 
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 5: Enterprise Value → Equity Value → Share Price
-        # ═══════════════════════════════════════════════════════════════════
-
+        # Enterprise Value -> Equity Value -> Share Price
         # D. Enterprise Value = PV(explicit period) + PV(terminal value)
         #    This represents the total value of the OPERATING business,
         #    owned jointly by equity holders and debt holders.
@@ -522,20 +445,17 @@ def run_master_valuation_app(tax_rate=None, risk_free_rate=None, equity_risk_pre
         #    This is the model's answer to "what should one share be worth?"
         intrinsic_share_price = (equity_value * 1e9) / market_assumptions["shares_outstanding"]
 
-        # ═══════════════════════════════════════════════════════════════════
-        # DISPLAY: The ultimate investment verdict
-        # ═══════════════════════════════════════════════════════════════════
-        print(f"💰 PV of Explicit 5-Year Cash Flows : {currency} {explicit_pv_sum:.2f} Billion")
-        print(f"🔮 PV of Terminal Value (Infinity)   : {currency} {pv_of_terminal_value:.2f} Billion")
-        print(f"🏢 Total Enterprise Value            : {currency} {enterprise_value:.2f} Billion")
-        print(f"🧾 Less: Outstanding Corporate Debt   : -{currency} {latest_debt_billions:.2f} Billion")
-        print(f"🎯 Total Net Equity Value            : {currency} {equity_value:.2f} Billion")
+        print(f"PV of Explicit 5-Year Cash Flows : {currency} {explicit_pv_sum:.2f} Billion")
+        print(f"PV of Terminal Value             : {currency} {pv_of_terminal_value:.2f} Billion")
+        print(f"Total Enterprise Value           : {currency} {enterprise_value:.2f} Billion")
+        print(f"Less: Outstanding Corporate Debt : -{currency} {latest_debt_billions:.2f} Billion")
+        print(f"Total Net Equity Value           : {currency} {equity_value:.2f} Billion")
         print("------------------------------------------------------------------")
-        print(f"💎 TARGET INTRINSIC VALUE PER SHARE   : {currency} {intrinsic_share_price:.2f}")
+        print(f"Intrinsic Value Per Share        : {currency} {intrinsic_share_price:.2f}")
         print("==================================================================")
 
     except Exception as error:
-        print(f"❌ Valuation aborted: Ensure the stock ticker exists inside your local data cache. Error details: {error}")
+        print(f"Valuation aborted: Ensure the stock ticker exists inside your local data cache. Error details: {error}")
 
 
 if __name__ == "__main__":

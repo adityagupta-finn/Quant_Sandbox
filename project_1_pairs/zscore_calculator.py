@@ -36,8 +36,8 @@ def calculate_zscores(db_name=DEFAULT_DB_PATH, window=60):
 
     print(f"Merged successfully. Total overlapping trading days: {len(df)}")
 
-    # 3. ADVANCED QUANT MATHEMATICS: Rolling OLS Beta & Spread
-    print(f"Calculating {window}-day rolling Beta-Neutral Hedge Ratios...")
+    # 3. Rolling OLS beta and spread
+    print(f"Calculating {window}-day rolling hedge ratios...")
     
     # Pre-allocate arrays for performance
     spreads = np.full(len(df), np.nan)
@@ -92,7 +92,7 @@ def calculate_zscores(db_name=DEFAULT_DB_PATH, window=60):
     # Drop the initial lookback rows that contain NaN values
     df = df.dropna().reset_index(drop=True)
 
-    # --- PORTFOLIO GATING REGIME ---
+    # --- Halt if cointegration is broken ---
     if ENFORCE_COINTEGRATION:
         latest_p = df['ADF_P_Value'].iloc[-1]
         print(f"Latest Augmented Dickey-Fuller P-Value: {latest_p:.4f}")
@@ -102,8 +102,8 @@ def calculate_zscores(db_name=DEFAULT_DB_PATH, window=60):
             conn.close()
             return
 
-    # 5. Save the upgraded analytical table back to SQLite for C++ consumption
-    print("Saving calculated alpha matrix to database (table: 'pairs_data')...")
+    # 5. Save the computed table back to SQLite for the C++ engine to read
+    print("Saving computed table to database (table: 'pairs_data')...")
     df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
     df['Ticker_A'] = TICKER_A
     df['Ticker_B'] = TICKER_B
@@ -111,10 +111,9 @@ def calculate_zscores(db_name=DEFAULT_DB_PATH, window=60):
 
     conn.close()
 
-    print("\n--- UPGRADED QUANT METRICS ---")
+    print("\n--- Latest computed row ---")
     print(df.tail(1)[['Date', 'Beta', 'Spread', 'ADF_P_Value', 'Z_Score']])
-    print("-------------------------------\n")
-    print("Math complete. Dynamic Strategy ready for C++ Execution Engine.")
+    print("---------------------------\n")
 
 if __name__ == "__main__":
     calculate_zscores()

@@ -23,10 +23,10 @@ int main(int argc, char* argv[]) {
     int exit = sqlite3_open(db_path.c_str(), &db);
     
     if (exit) {
-        cerr << "CRITICAL ERROR: Cannot open database: " << sqlite3_errmsg(db) << endl;
+        cerr << "Error: cannot open database: " << sqlite3_errmsg(db) << endl;
         return -1;
     } else {
-        cout << "System Online: Connected to Alpha Database." << endl;
+        cout << "Connected to database: " << db_path << endl;
     }
 
     // 2. Query the absolute latest data point (Limit 1)
@@ -45,7 +45,7 @@ int main(int argc, char* argv[]) {
             string ticker_a = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
             string ticker_b = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
 
-            cout << "\n--- LIVE MARKET SCAN ---" << endl;
+            cout << "\n--- Latest signal ---" << endl;
             cout << "Date: " << date << " | Z-Score: " << z_score << endl;
 
             // 4. The Algorithmic Trade Execution Logic
