@@ -56,6 +56,70 @@ DATABASE_PATH = BASE_DIR / "corporate_data.db"
 TAX_RATE = 0.21              # US federal corporate tax rate (21% since 2017 Tax Cuts and Jobs Act)
 FORECAST_YEARS = 5           # Number of explicit forecast years before terminal value takes over
 
+# Every field the model actually consumes downstream (CAGR, margins, WACC's
+# debt lookup). A fiscal year missing any of these is not usable.
+REQUIRED_HISTORICAL_COLUMNS = [
+    'revenue', 'operatingIncome', 'totalDebt',
+    'depreciationAndAmortization', 'capitalExpenditure',
+]
+MIN_USABLE_YEARS = 3  # Below this, a CAGR/margin estimate isn't reliable enough to project from.
+
+
+def _drop_incomplete_years(df):
+    """
+    Drop fiscal years with missing (NaN) data in any field the model depends on.
+
+    Yahoo Finance frequently has gaps in the oldest year of its reporting
+    window — e.g. TATASTEEL.NS reports no FY2022 Total Revenue at all, just
+    a NaN. Left alone, that NaN flows straight into calculate_advanced_drivers():
+    CAGR reads revenue.iloc[0] as revenue_start, which becomes NaN, so CAGR
+    becomes NaN, and every downstream number (FCFF, PV, terminal value,
+    intrinsic share price) becomes NaN too — silently. No exception is ever
+    raised; the pipeline "succeeds" and prints "$nan" or similar as the
+    answer. This function makes that failure loud and early instead.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The merged historical DataFrame, before use in calculate_advanced_drivers().
+        Must already have a 'year' column.
+
+    Returns
+    -------
+    pd.DataFrame
+        The same DataFrame with incomplete-year rows removed and the index reset.
+
+    Raises
+    ------
+    ValueError
+        If fewer than MIN_USABLE_YEARS rows remain after dropping incomplete
+        years — not enough history left for a meaningful CAGR/margin estimate.
+    """
+    for col in REQUIRED_HISTORICAL_COLUMNS:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    incomplete_mask = df[REQUIRED_HISTORICAL_COLUMNS].isna().any(axis=1)
+
+    if incomplete_mask.any():
+        dropped_years = df.loc[incomplete_mask, 'year'].tolist()
+        missing_by_year = {
+            int(row['year']): [c for c in REQUIRED_HISTORICAL_COLUMNS if pd.isna(row[c])]
+            for _, row in df.loc[incomplete_mask].iterrows()
+        }
+        print(f"⚠️  Dropping {len(dropped_years)} incomplete fiscal year(s) from the historical "
+              f"window — missing data: {missing_by_year}. These would otherwise silently poison "
+              f"CAGR and every downstream projection with NaN.")
+        df = df.loc[~incomplete_mask].reset_index(drop=True)
+
+    if len(df) < MIN_USABLE_YEARS:
+        raise ValueError(
+            f"Only {len(df)} usable fiscal year(s) of historical data remain after dropping "
+            f"incomplete years (minimum {MIN_USABLE_YEARS} required for a reliable CAGR/margin "
+            f"estimate). Try a ticker with more complete reporting history."
+        )
+
+    return df
+
 
 def load_historical_cache(ticker):
     """
@@ -76,11 +140,16 @@ def load_historical_cache(ticker):
         Merged DataFrame with columns:
           date, revenue, operatingIncome, totalDebt,
           depreciationAndAmortization, capitalExpenditure, year
+        Fiscal years missing any of these fields (Yahoo Finance often has
+        gaps in the oldest reported year) are dropped — see
+        _drop_incomplete_years() — with a warning printed for each one.
 
     Raises
     ------
     ValueError
-        If `ticker` fails validate_ticker() — see Security below.
+        If `ticker` fails validate_ticker() (see Security below), or if
+        fewer than MIN_USABLE_YEARS fiscal years remain after dropping
+        incomplete years.
     sqlite3.OperationalError
         If the tables for this ticker do not exist in the database (i.e.,
         the ingestion step was not run first).
@@ -105,10 +174,23 @@ def load_historical_cache(ticker):
 
     # Merge all three on the 'date' column so every fiscal year has
     # revenue, EBIT, debt, D&A, and CapEx in a single row.
-    df = inc.merge(bal, on='date').merge(cf, on='date')
+    #
+    # income_df already carries every field (dcf_ingestion.py's
+    # fetch_from_yahoo_finance() populates balance_df/cashflow_df from the
+    # same enriched row dicts as income_df, so totalDebt,
+    # depreciationAndAmortization, and capitalExpenditure are exact
+    # duplicates across all three tables). Merging on the full bal/cf
+    # frames would collide on those overlapping non-key columns and pandas
+    # would silently rename them to totalDebt_x/totalDebt_y etc., which
+    # then KeyErrors downstream on df['totalDebt']. Merging on just 'date'
+    # from bal/cf keeps the merge as a fiscal-year alignment check without
+    # the collision.
+    df = inc.merge(bal[['date']], on='date').merge(cf[['date']], on='date')
 
     # Extract the year as an integer for display and reference purposes.
     df['year'] = pd.to_datetime(df['date']).dt.year
+
+    df = _drop_incomplete_years(df)
 
     return df
 
