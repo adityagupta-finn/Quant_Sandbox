@@ -1,54 +1,151 @@
-# Quantitative Finance & Algorithmic Trading Sandbox
+# Quantitative Finance Sandbox
 
-This monorepo serves as an advanced quantitative finance environment, bridging automated data engineering pipelines with low-latency statistical arbitrage frameworks. The architecture leverages a hybrid Python/C++ execution model to optimize both rapid exploratory data analysis (EDA) and computationally intensive financial modeling.
-
----
-
-## 📂 Project 1: Quantitative Pairs Trading Engine (`/project_1_pairs`)
-
-A dual-language statistical arbitrage engine engineered for deterministic spread computation, real-time signal generation, and parameterized backtesting across equity universes.
-
-### 🏗️ System Architecture
-*   **Analytics & Visualization Layer:** Python (`Pandas`, `yfinance`, `Streamlit`, `Plotly`) for real-time dashboard rendering, pipeline orchestration, and interactive charting.
-*   **Execution Backend:** Native compiled C++ binaries invoked via Python `subprocess` orchestration to optimize latency and accelerate vector math operations during rolling spread calculations.
-
-### 𝖬 Math & Algorithmic Framework
-*   **Dynamic Hedge Ratios:** Computes time-varying Beta ($\beta$) coefficients between equity pairs using rolling Ordinary Least Squares (OLS) regressions across configurable historical lookback windows.
-*   **Cointegration Diagnostics:** Enforces mean-reversion confirmation by executing the Augmented Dickey-Fuller (ADF) unit root test on residual spread series, gating signal generation at strict stationarity thresholds ($p < 0.05$).
-*   **Signal Generation:** Normalizes the tracking spread into a running $Z$-score, dynamically triggering entry signals at $\pm2\sigma$ and exit parameters upon mean reversion to $0\sigma$:
-  $$Z = \frac{X - \mu}{\sigma}$$
+Two independent personal projects: a pairs-trading signal generator
+(Python + C++) and a DCF valuation tool (Python). Both are learning
+projects, not production trading or investment systems — see the
+Limitations section under each before trusting any output.
 
 ---
 
-## 📂 Project 2: Automated Intrinsic Valuation (DCF) Pipeline (`/project_2_dcf`)
+## Project 1: Pairs Trading Signal Generator (`/project_1_pairs`)
 
-An end-to-end, automated 3-statement financial modeling pipeline built to programmatically scrape raw financials, cache structured historical data, and execute Discounted Cash Flow (DCF) corporate valuations at scale.
+Computes a rolling OLS hedge ratio between two equity tickers, tests
+whether the resulting spread is cointegrated (Augmented Dickey-Fuller
+test), and generates a mean-reversion signal from the spread's Z-score.
 
-### 🏗️ System Architecture
-*   **Data Ingestion & Verification:** Python pipeline utilizing `yfinance` with a structured payload-validation layer to parse asymmetric financial statements.
-*   **Caching Layer:** Local `SQLite` storage architecture designed to persist historical Income Statements, Balance Sheets, and Cash Flow Statements—drastically reducing external API network dependency and mitigating evaluation runtime latency.
+- **Data ingestion** (`alpaca_ingestion.py`): pulls 2 years of daily
+  closes for two tickers from the Alpaca API into a local SQLite database.
+- **Signal calculation** (`zscore_calculator.py`): rolling OLS beta
+  (`statsmodels.OLS`, 60-day window) between the pair, the resulting
+  spread, an ADF cointegration test on that spread, and a rolling Z-score:
+  `Z = (spread − rolling_mean) / rolling_std`. If the ADF test doesn't
+  reject the unit-root null (p ≥ 0.05), the pipeline halts and does not
+  write a signal table — a non-cointegrated pair has no statistical basis
+  for a mean-reversion trade.
+- **Execution engine** (`engine.cpp`): reads the latest Z-score from
+  SQLite and prints LONG/SHORT/HOLD text based on a ±2.0 threshold. It
+  does not place orders, track positions, or compute P&L — it prints a
+  recommendation.
+- **Dashboard** (`dashboard.py`): Streamlit UI showing the spread chart,
+  hedge ratio, ADF result, and a button to run the C++ engine.
 
-### 𝖬 Math & Valuation Framework
-*   **Free Cash Flow to Firm (FCFF):** Programmatically projects core operating cash flows across a 5-year explicit forward horizon using normalized historical drivers:
-  $$FCFF = NOPAT + \text{D/A} - CapEx - \Delta NWC$$
-*   **Cost of Capital (WACC & CAPM):** Derives dynamic discount rates by calculating the Weighted Average Cost of Capital (WACC), applying the Capital Asset Pricing Model (CAPM) to evaluate equity risk premiums:
-  $$K_e = R_f + \beta(R_m - R_f)$$
-*   **Terminal Value Estimation:** Computes the continuing enterprise value beyond the explicit forecast period using the Gordon Growth Model:
-  $$TV = \frac{FCFF_{t+1}}{WACC - g}$$
-*   **Scenario Stress-Testing:** Implements discrete sensitivity matrices across target valuation assumptions (e.g., WACC variations vs. terminal growth rates) alongside EV/Revenue exit multiples to model M&A sponsor returns.
+The ticker pair defaults to AAPL/MSFT and is configurable via the
+`PAIRS_TICKER_A` / `PAIRS_TICKER_B` environment variables.
+
+### Limitations
+
+- **No backtest.** There is no historical simulation of entries, exits,
+  or returns anywhere in this project. All of the above operates on the
+  latest data point only.
+- **No P&L or position tracking.** The C++ engine prints a signal; it
+  does not simulate or track what a position following that signal would
+  have earned or lost.
+- **Single-snapshot only.** Every run evaluates the current state of the
+  data, not a track record across time.
 
 ---
 
-## 🛠️ Monorepo Tech Stack
+## Project 2: DCF Valuation Pipeline (`/project_2_dcf`)
 
-*   **Requires:** Developed on Python 3.14; requires 3.12+ (see `requirements.txt` for pinned dependencies)
-*   **Languages:** Python, C++
-*   **Data Science & Visualization:** Pandas, NumPy, SciPy, Streamlit, Plotly
-*   **Storage & Ingestion:** SQLite, yfinance, Requests, BeautifulSoup
+Pulls a company's income statement, balance sheet, and cash flow
+statement via `yfinance`, projects 5 years of Free Cash Flow to Firm from
+historical averages, computes a WACC from live per-ticker market data,
+and discounts the projection plus a terminal value to an intrinsic
+share price.
+
+- **Ingestion** (`dcf_ingestion.py`): fetches and caches the three
+  statements in SQLite (`corporate_data.db`), one row per fiscal year.
+- **Forecasting** (`dcf_forecasting.py`): computes revenue CAGR and
+  average operating margin / D&A / CapEx ratios from history, then
+  projects `FCFF = NOPAT + D&A − CapEx − ΔNWC` forward 5 years. ΔNWC is a
+  flat 1% of revenue assumption, not derived from actual working-capital
+  changes. Fiscal years with missing data (Yahoo Finance commonly has
+  gaps in the oldest reported year) are dropped before the CAGR
+  calculation, with a warning printed for each one dropped.
+- **Valuation** (`dcf_valuation.py`): computes WACC via CAPM using the
+  ticker's live beta, market cap, and debt from `yfinance`, resolves
+  tax rate / risk-free rate / equity risk premium from the ticker's own
+  jurisdiction (`United States` and `India` currently have dedicated
+  defaults; anything else falls back to the US numbers with a loud
+  warning), discounts the 5-year forecast plus a Gordon Growth terminal
+  value, and divides by shares outstanding. All monetary output is
+  labeled with the company's actual reporting currency, not assumed USD.
+
+### Limitations
+
+- **Flat historical assumptions.** CAGR and operating margin are single
+  averages from the last few years of history, projected forward
+  unchanged. This fits a stable business reasonably well and fits a
+  cyclical or volatile one (commodity producers, for example) poorly —
+  a down-cycle in the historical window will project as permanent
+  decline, and vice versa.
+- **Single-point WACC, no sensitivity analysis.** The model produces one
+  WACC and one intrinsic share price from one set of assumptions. There
+  is no sensitivity table across WACC or terminal growth rate, and no
+  EV/Revenue or other multiple-based cross-check.
+- **Only two jurisdictions have tax/risk-free/ERP defaults.** Every other
+  country falls back to US-calibrated numbers (with a warning) unless you
+  pass `tax_rate` / `risk_free_rate` / `equity_risk_premium` explicitly.
+- **Depends entirely on yfinance data quality.** Missing years, renamed
+  line items, and inconsistent coverage across tickers are real and
+  observed (not hypothetical) failure modes; see `dcf_forecasting.py`'s
+  handling of incomplete fiscal years.
 
 ---
 
-### 🧑‍💻 Developed By
-**Aditya Gupta**  
-*B.E. (Hons.) Electrical & Electronics Engineering & M.Sc. (Hons.) Economics*  
+## Tech Stack
+
+- **Languages:** Python, C++
+- **Python:** pandas, numpy, statsmodels, yfinance, streamlit, plotly,
+  alpaca-py, python-dotenv — see `requirements.txt` for pinned versions.
+- **Storage:** SQLite (both projects cache to a local `.db` file).
+- **Requires:** Python 3.12+ (developed on 3.14).
+
+---
+
+## Build & Run (macOS)
+
+```bash
+# One-time setup
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Project 1's C++ engine
+clang++ -std=c++17 project_1_pairs/engine.cpp -o project_1_pairs/engine -lsqlite3
+```
+
+**Project 1** needs Alpaca API credentials in `project_1_pairs/.env`:
+
+```
+ALPACA_API_KEY=your_key
+ALPACA_SECRET_KEY=your_secret
+```
+
+Then either run `./run_system.sh` (builds the engine if needed, runs the
+signal calculation, and launches the dashboard), or step through it
+manually:
+
+```bash
+python project_1_pairs/alpaca_ingestion.py
+python project_1_pairs/zscore_calculator.py
+streamlit run project_1_pairs/dashboard.py
+```
+
+Override the default AAPL/MSFT pair with `PAIRS_TICKER_A=GOOGL
+PAIRS_TICKER_B=AMZN python project_1_pairs/alpaca_ingestion.py` (and the
+same env vars for `zscore_calculator.py`).
+
+**Project 2** needs no credentials (yfinance is unauthenticated):
+
+```bash
+python project_2_dcf/dcf_ingestion.py    # prompts for a ticker, prints an audit table
+python project_2_dcf/dcf_valuation.py    # prompts for a ticker, prints the full valuation
+```
+
+---
+
+### Developed By
+**Aditya Gupta**
+B.E. (Hons.) Electrical & Electronics Engineering & M.Sc. (Hons.) Economics
 Birla Institute of Technology & Science (BITS), Pilani - Goa Campus
