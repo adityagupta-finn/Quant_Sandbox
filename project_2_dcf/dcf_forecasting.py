@@ -42,10 +42,13 @@ Usage
 """
 
 import sqlite3
+from pathlib import Path
 import pandas as pd
 
 # ─── MODEL CONFIGURATION ─────────────────────────────────────────────────────
-DATABASE_PATH = "project_2_dcf/corporate_data.db"
+# Resolved relative to this file, not the cwd — see dcf_ingestion.py.
+BASE_DIR = Path(__file__).resolve().parent
+DATABASE_PATH = BASE_DIR / "corporate_data.db"
 TAX_RATE = 0.21              # US federal corporate tax rate (21% since 2017 Tax Cuts and Jobs Act)
 FORECAST_YEARS = 5           # Number of explicit forecast years before terminal value takes over
 

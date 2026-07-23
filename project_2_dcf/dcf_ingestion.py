@@ -42,13 +42,17 @@ Usage
 """
 
 import sqlite3
+from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
 # ─── DATABASE CONFIGURATION ──────────────────────────────────────────────────
 # The SQLite file lives inside the project_2_dcf/ folder to keep corporate
 # financial data isolated from other projects (e.g., Project 1 pairs trading).
-DATABASE_PATH = "project_2_dcf/corporate_data.db"
+# Resolved relative to this file, not the cwd, so it works whether the
+# pipeline is launched from the repo root or from inside project_2_dcf/.
+BASE_DIR = Path(__file__).resolve().parent
+DATABASE_PATH = BASE_DIR / "corporate_data.db"
 
 
 def fetch_from_yahoo_finance(ticker):

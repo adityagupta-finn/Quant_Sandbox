@@ -61,8 +61,16 @@ Usage
     → Prompts for a ticker, then outputs the full valuation.
 """
 
+import sys
 import sqlite3
+from pathlib import Path
 import pandas as pd
+
+# Make sure dcf_forecasting resolves regardless of cwd or how this script
+# was launched — relying on Python's implicit "script dir on sys.path[0]"
+# behavior is fragile (e.g. it doesn't apply under `python -m`).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 # Import the forecasting engine and data loader from Stage 2.
 from dcf_forecasting import generate_fcff_projections, load_historical_cache
 
