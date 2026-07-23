@@ -41,7 +41,7 @@ An end-to-end, automated 3-statement financial modeling pipeline built to progra
 
 ## 🛠️ Monorepo Tech Stack
 
-*   **Requires:** Python 3.14+ (see `requirements.txt` for pinned dependencies)
+*   **Requires:** Developed on Python 3.14; requires 3.12+ (see `requirements.txt` for pinned dependencies)
 *   **Languages:** Python, C++
 *   **Data Science & Visualization:** Pandas, NumPy, SciPy, Streamlit, Plotly
 *   **Storage & Ingestion:** SQLite, yfinance, Requests, BeautifulSoup
