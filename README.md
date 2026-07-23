@@ -32,6 +32,14 @@ test), and generates a mean-reversion signal from the spread's Z-score.
 The ticker pair defaults to AAPL/MSFT and is configurable via the
 `PAIRS_TICKER_A` / `PAIRS_TICKER_B` environment variables.
 
+**A halt is intended behaviour, not a failure.** If `zscore_calculator.py`
+prints "Cointegration test failed" and stops, that means the ADF test
+did its job: the current pair's spread isn't statistically mean-reverting,
+so there's no valid basis for a signal. In fact the default AAPL/MSFT
+pair over the trailing 2 years halts on real market data (ADF p ≈ 0.88) —
+try a different pair, or a different window, rather than treating the
+halt itself as a bug.
+
 ### Limitations
 
 - **No backtest.** There is no historical simulation of entries, exits,

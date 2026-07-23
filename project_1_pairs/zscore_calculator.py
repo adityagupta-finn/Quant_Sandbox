@@ -97,8 +97,11 @@ def calculate_zscores(db_name=DEFAULT_DB_PATH, window=60):
         latest_p = df['ADF_P_Value'].iloc[-1]
         print(f"Latest Augmented Dickey-Fuller P-Value: {latest_p:.4f}")
         if latest_p >= 0.05:
-            print("CRITICAL HALT: Cointegration leash is broken (p-value >= 0.05).")
-            print("Market state is a Random Walk. System halting execution pipeline.")
+            print(f"Cointegration test failed: ADF p-value = {latest_p:.4f} (>= 0.05 threshold).")
+            print(f"The {TICKER_A}/{TICKER_B} spread is not statistically mean-reverting over "
+                  f"this window, so there's no statistical basis for a pairs-trade signal right now.")
+            print("Halting: no pairs_data table will be written. The dashboard and engine will "
+                  "have nothing to read until this pair (or a different one) tests as cointegrated.")
             conn.close()
             return
 
