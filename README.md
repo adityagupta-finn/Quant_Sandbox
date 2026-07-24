@@ -29,16 +29,33 @@ test), and generates a mean-reversion signal from the spread's Z-score.
 - **Dashboard** (`dashboard.py`): Streamlit UI showing the spread chart,
   hedge ratio, ADF result, and a button to run the C++ engine.
 
-The ticker pair defaults to AAPL/MSFT and is configurable via the
-`PAIRS_TICKER_A` / `PAIRS_TICKER_B` environment variables.
+The ticker pair defaults to **GLD/GDX** (gold bullion vs. gold miners)
+and is configurable via the `PAIRS_TICKER_A` / `PAIRS_TICKER_B`
+environment variables.
+
+**Why GLD/GDX, and why it can still halt.** Of AAPL/MSFT plus six classic
+candidates (KO/PEP, XOM/CVX, V/MA, HD/LOW, UPS/FDX, GLD/GDX) tested
+against real 2-year daily data, GLD/GDX is the only one with genuine
+full-history cointegration (Engle-Granger ADF on the full 2-year spread:
+p=0.0040 — GDX's gold-miner earnings are structurally tied to the gold
+price GLD tracks). The others show no meaningful relationship at
+full history either (all p > 0.11).
+
+But `zscore_calculator.py`'s gate doesn't test full history — it
+re-estimates beta fresh in every 60-day window and tests only the single
+most recent one, which is a stricter, noisier test than full-history
+cointegration. A pair can be soundly cointegrated over 2 years and still
+have its latest 60-day slice come up non-stationary. At the time this was
+written, GLD/GDX itself fails that specific test (p=0.8203 on the latest
+window) — it was chosen as the default because it's a real candidate that
+will sometimes pass, not because it passes on every run.
 
 **A halt is intended behaviour, not a failure.** If `zscore_calculator.py`
-prints "Cointegration test failed" and stops, that means the ADF test
-did its job: the current pair's spread isn't statistically mean-reverting,
-so there's no valid basis for a signal. In fact the default AAPL/MSFT
-pair over the trailing 2 years halts on real market data (ADF p ≈ 0.88) —
-try a different pair, or a different window, rather than treating the
-halt itself as a bug.
+prints "Cointegration test failed" and stops, the ADF test did its job:
+the current window's spread isn't statistically mean-reverting, so there's
+no valid basis for a signal right now. AAPL/MSFT — kept as the worked
+counter-example of two large-caps with no structural relationship at all —
+halts even more decisively (rolling: p≈0.88, full-history: p≈0.85).
 
 ### Limitations
 

@@ -2,9 +2,17 @@
 pair_config.py — Shared ticker-pair configuration for project_1_pairs.
 
 Reads the two tickers to trade from environment variables
-(PAIRS_TICKER_A, PAIRS_TICKER_B), defaulting to AAPL/MSFT. Validated
+(PAIRS_TICKER_A, PAIRS_TICKER_B), defaulting to GLD/GDX. Validated
 against a strict whitelist since these values get used to build SQL table
-and column names (e.g. "AAPL_Close", table "AAPL") in zscore_calculator.py.
+and column names (e.g. "GLD_Close", table "GLD") in zscore_calculator.py.
+
+GLD/GDX (gold bullion vs. gold miners) was chosen as the default because
+it's the one pair, of several tested against real 2-year daily data, with
+genuine full-history cointegration (Engle-Granger ADF p=0.0040) rather
+than an arbitrary pair with no structural relationship. It can still fail
+the rolling 60-day gate on any given day, since that gate re-estimates
+beta fresh each window and tests only the latest one — a stricter, noisier
+test than full-history cointegration. See the README for the tradeoff.
 
 Alpaca (this project's data source) only covers US equities, so the
 allowed format is simpler than project_2_dcf's ticker_utils.py — no '.'
@@ -27,5 +35,5 @@ def _resolve_ticker(env_var, default):
     return ticker
 
 
-TICKER_A = _resolve_ticker("PAIRS_TICKER_A", "AAPL")
-TICKER_B = _resolve_ticker("PAIRS_TICKER_B", "MSFT")
+TICKER_A = _resolve_ticker("PAIRS_TICKER_A", "GLD")
+TICKER_B = _resolve_ticker("PAIRS_TICKER_B", "GDX")
