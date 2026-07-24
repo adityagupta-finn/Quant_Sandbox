@@ -18,6 +18,19 @@ int main(int argc, char* argv[]) {
         db_path = (exe_dir / "market_data.db").string();
     }
 
+    // Z-score threshold: explicit argv[2] if given (dashboard.py passes its
+    // slider value here), otherwise 2.0. Previously hardcoded regardless of
+    // what the dashboard's slider actually sent.
+    double z_threshold = 2.0;
+    if (argc > 2) {
+        try {
+            z_threshold = stod(argv[2]);
+        } catch (const exception&) {
+            cerr << "Warning: could not parse z-threshold argument '" << argv[2]
+                 << "', using default " << z_threshold << endl;
+        }
+    }
+
     sqlite3* db;
     // 1. Open the pipeline to the database
     int exit = sqlite3_open(db_path.c_str(), &db);
@@ -46,13 +59,14 @@ int main(int argc, char* argv[]) {
             string ticker_b = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
 
             cout << "\n--- Latest signal ---" << endl;
-            cout << "Date: " << date << " | Z-Score: " << z_score << endl;
+            cout << "Date: " << date << " | Z-Score: " << z_score
+                 << " | Threshold: " << z_threshold << endl;
 
             // 4. The Algorithmic Trade Execution Logic
-            if (z_score >= 2.0) {
+            if (z_score >= z_threshold) {
                 cout << "SIGNAL: EXTREME DIVERGENCE (OVERBOUGHT)." << endl;
                 cout << "ACTION: EXECUTING SPREAD -> SHORT " << ticker_a << ", LONG " << ticker_b << "." << endl;
-            } else if (z_score <= -2.0) {
+            } else if (z_score <= -z_threshold) {
                 cout << "SIGNAL: EXTREME DIVERGENCE (OVERSOLD)." << endl;
                 cout << "ACTION: EXECUTING SPREAD -> LONG " << ticker_a << ", SHORT " << ticker_b << "." << endl;
             } else {

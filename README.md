@@ -23,9 +23,10 @@ test), and generates a mean-reversion signal from the spread's Z-score.
   write a signal table — a non-cointegrated pair has no statistical basis
   for a mean-reversion trade.
 - **Execution engine** (`engine.cpp`): reads the latest Z-score from
-  SQLite and prints LONG/SHORT/HOLD text based on a ±2.0 threshold. It
-  does not place orders, track positions, or compute P&L — it prints a
-  recommendation.
+  SQLite and prints LONG/SHORT/HOLD text based on a Z-score threshold
+  (default ±2.0, overridable as a second command-line argument — the
+  dashboard's slider drives this directly). It does not place orders,
+  track positions, or compute P&L — it prints a recommendation.
 - **Dashboard** (`dashboard.py`): Streamlit UI showing the spread chart,
   hedge ratio, ADF result, and a button to run the C++ engine.
 
