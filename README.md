@@ -1,9 +1,10 @@
 # Quantitative Finance Sandbox
 
-Two independent personal projects: a pairs-trading signal generator
-(Python + C++) and a DCF valuation tool (Python). Both are learning
-projects, not production trading or investment systems — see the
-Limitations section under each before trusting any output.
+Three independent personal projects: a pairs-trading signal generator
+(Python + C++), a DCF valuation tool (Python), and a project finance
+debt-sizing model (Python). All are learning projects, not production
+trading, investment, or lending systems — see the Limitations section
+under each before trusting any output.
 
 ---
 
@@ -119,12 +120,96 @@ share price.
 
 ---
 
+## Project 3: Solar SPV Debt-Sizing Model (`/project_3_projectfinance`)
+
+Sizes a senior term loan for a 200MW solar SPV in India from deal
+assumptions alone — no market data, no `yfinance`, nothing pulled live.
+Given a tariff, capex range, generation profile, and target DSCR, it works
+out how large a loan the project's own cash flows can support, shapes a
+repayment schedule that holds DSCR flat at target rather than
+straight-line, and reports both the unlevered Project IRR and the levered
+Equity IRR.
+
+- **Assumptions** (`pf_assumptions.py`): every locked input constant —
+  capacity, tariff, capex/MW, CUF, D:E ratio, target DSCR, tenor,
+  moratorium, tax rate, depreciation rate, O&M, degradation, loan rate —
+  in one place, imported by every other module.
+- **Construction** (`pf_construction.py`): monthly capex drawdown over the
+  build period with interest during construction (IDC) capitalized into
+  the loan balance. The debt/equity split of each month's draw is solved
+  by bisection so the *final* debt balance (draws plus capitalized IDC)
+  comes out to exactly 75% of total project cost, not just 75% of the
+  draws themselves.
+- **Operations** (`pf_operations.py`): the debt-independent annual series
+  for all 15 years post-COD — generation (with panel degradation),
+  revenue, opex (with escalation), and WDV tax depreciation.
+- **Debt sizing** (`pf_debt_sizing.py`): bisection search on loan principal
+  so a sculpted (DSCR-flat, not straight-line) repayment schedule fully
+  amortizes by year 15 at exactly the target DSCR. That DSCR-based cap is
+  compared against the 75% leverage cap from construction; whichever is
+  lower governs the actual loan.
+- **Returns** (`pf_returns.py`): Project IRR (unlevered, post-tax, no
+  interest shield) and Equity IRR (post-debt-service), each solved two
+  independent ways (Newton-Raphson and bisection) and cross-checked to
+  agree.
+- **Sensitivity** (`pf_sensitivity.py`): one-at-a-time tornado grid over
+  CUF, tariff, capex overrun, and COD delay, re-evaluated against the
+  *already-sized* base-case debt schedule rather than resizing debt per
+  scenario.
+- **Orchestrator** (`pf_model.py`): runs the base case end-to-end and
+  prints every stage — construction convergence, debt-sizing convergence,
+  the annual schedule, returns, and the sensitivity tornado.
+
+**Base case result.** Sanctioned debt ₹499.4 Cr — the DSCR cap binds, not
+the 75% leverage cap (₹570.1 Cr), meaning the deal is more conservatively
+geared (~65.7%) than the headline 75:25 target actually allows. Project
+IRR 7.07% (unlevered), Equity IRR 3.46% (levered) — a **−3.61 percentage
+point leverage effect**. Leverage is negative here because the 10% loan
+rate sits above the project's own unlevered return; the interest tax
+shield helps equity but isn't enough to flip the sign.
+
+Run it (no credentials needed, no cached data to build first):
+
+```bash
+python project_3_projectfinance/pf_model.py
+```
+
+### Limitations
+
+- **Moratorium is modeled as a full interest-only year, not a literal 6
+  months.** Every cash flow in this model runs on annual periods; the
+  actual deal term is a 6-month grace. Approximated as "no principal due
+  in Year 1" rather than introducing a semi-annual convention for just
+  one year — slightly more generous to the SPV than the literal term.
+- **No half-year depreciation convention.** Section 32 halves first-year
+  depreciation to 20% if COD falls after October 3rd of that fiscal year,
+  and allows an additional 20% first-year allowance for power-generating
+  companies — both real, both confirmed still current, neither modeled.
+  Depreciation is a flat 40% WDV every year regardless of COD timing,
+  which understates the tax shield in a delayed-COD scenario.
+- **Loan rate is a single flat number, not a rate path.** 10% for the
+  life of the loan; no benchmark-linked or floating-rate modeling, so the
+  model can't represent a loan that reprices with policy rates over its
+  15-year tenor.
+- **Sensitivity assumes cost overruns are 100% equity-funded.** The
+  tornado grid freezes the base-case debt schedule and re-evaluates DSCR
+  and Equity IRR against it; a capex overrun or COD delay raises total
+  project cost, but since the loan doesn't grow with it, that entire
+  excess is funded by additional equity. This is why capex overrun and
+  COD delay move only Equity IRR in the sensitivity output and never
+  DSCR — a deliberate design choice (debt service doesn't get worse under
+  a fixed-size sanctioned loan), not a gap in the model.
+
+---
+
 ## Tech Stack
 
 - **Languages:** Python, C++
 - **Python:** pandas, numpy, statsmodels, yfinance, streamlit, plotly,
   alpaca-py, python-dotenv — see `requirements.txt` for pinned versions.
-- **Storage:** SQLite (both projects cache to a local `.db` file).
+- **Storage:** SQLite (projects 1 and 2 cache to a local `.db` file);
+  project 3 has no persistence layer — it's a pure computation over deal
+  assumptions, nothing to cache.
 - **Requires:** Python 3.12+ (developed on 3.14).
 
 ---
@@ -167,6 +252,13 @@ same env vars for `zscore_calculator.py`).
 ```bash
 python project_2_dcf/dcf_ingestion.py    # prompts for a ticker, prints an audit table
 python project_2_dcf/dcf_valuation.py    # prompts for a ticker, prints the full valuation
+```
+
+**Project 3** needs no credentials and no prior ingestion step — every
+assumption is a module-level constant in `pf_assumptions.py`:
+
+```bash
+python project_3_projectfinance/pf_model.py    # runs the base case + sensitivity, prints the full report
 ```
 
 ---
